@@ -7,13 +7,16 @@ Created as part of the _Surge Model Intercomparison Project_
 ([SurgeMIP](https://www.sciencedirect.com/science/article/pii/S2212094724000501))
 ## Quick start
 
-```python
-import pandas as pd
-from detide.harmonic import pytides_surge
-from detide.constituents import FULL
+```bash
+python coastal_surge/extract_outputs_to_shoreline_pts.py \
+    --points-csv ./data/coastal_points_gsshs_low_20km_35k-pts.csv \
+    --adcirc-dir /path/to/output/CFS-reanalysis/ \
+    --output-hourly  /path/to/cfs_reanalysis_35k_hourly.nc \
+    --output-monthly /path/to/cfs_reanalysis_35k_monthly_max.nc
 
-df = pd.read_parquet("tests/data/cuxh.parquet")
-surge = pytides_surge(df["elev"], constituents=FULL)
+python coastal_surge/extract_surge_block_maxima.py \
+    --compact-file /path/to/cfs_reanalysis_35k_hourly.nc \
+    --output       /path/to/cfs_reanalysis_detided_35k.nc
 ```
 
 ## Docs
