@@ -17,7 +17,14 @@ from a static YAML file or be copied from an input file.
 from datetime import datetime, timezone
 
 import netCDF4 as nc
+import pandas as pd
 import yaml
+
+# Reference epoch for all "hours since ..." time variables in the pipeline.
+# 1900-01-01 (rather than 1970-01-01) so campaigns that run further back in
+# time don't produce negative time values.
+EPOCH = pd.Timestamp('1900-01-01')
+TIME_UNITS = 'hours since 1900-01-01 00:00:00'
 
 # Fallback values used for any field not present in the user's YAML file.
 DEFAULTS = {
@@ -189,6 +196,52 @@ def set_geospatial_extent(ds, lon, lat, depth=None, positive='down'):
         ds.geospatial_vertical_max = float(max(depth))
         ds.geospatial_vertical_units = 'm'
         ds.geospatial_vertical_positive = positive
+
+
+def read_times(ds, varname='time'):
+    """
+    Read a time variable as real timestamps, using whatever `units` and
+    `calendar` it actually declares — not an assumed epoch. This matters
+    for files written before the pipeline's reference epoch changed, or any
+    file that otherwise uses a different "<units> since <epoch>" string.
+
+    Parameters
+    ----------
+    ds : netCDF4.Dataset
+    varname : str
+
+    Returns
+    -------
+    pandas.DatetimeIndex
+    """
+    var = ds.variables[varname]
+    calendar = getattr(var, 'calendar', 'standard')
+    cftime_dates = nc.num2date(var[:], var.units, calendar)
+    return pd.to_datetime([d.isoformat() for d in cftime_dates])
+
+
+def write_times(ds, varname, times):
+    """
+    Convert `times` into the numeric values of an existing time variable,
+    honoring whatever `units`/`calendar` that variable already declares
+    (rather than assuming the pipeline's current reference epoch). This
+    keeps appends self-consistent with a file created under a different
+    epoch, e.g. an older run using "hours since 1970-01-01".
+
+    Parameters
+    ----------
+    ds : netCDF4.Dataset
+    varname : str
+    times : pandas.DatetimeIndex or sequence of datetime-like
+
+    Returns
+    -------
+    ndarray of float, ready to assign into ds.variables[varname][...]
+    """
+    var = ds.variables[varname]
+    calendar = getattr(var, 'calendar', 'standard')
+    times = pd.DatetimeIndex(times)
+    return nc.date2num(times.to_pydatetime(), var.units, calendar)
 
 
 def update_time_coverage(ds, times):

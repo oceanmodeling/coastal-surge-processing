@@ -353,7 +353,7 @@ def init_hourly_output(path, n_nodes, node_index, node_lon, node_lat,
 
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
-    v.units = 'hours since 1970-01-01 00:00:00'
+    v.units = nc_metadata.TIME_UNITS
     v.calendar = 'standard'
     v.axis = 'T'
 
@@ -399,7 +399,7 @@ def init_monthly_output(path, n_nodes, node_index, node_lon, node_lat,
 
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
-    v.units = 'hours since 1970-01-01 00:00:00'
+    v.units = nc_metadata.TIME_UNITS
     v.calendar = 'standard'
     v.axis = 'T'
     v.long_name = 'Start of calendar month'
@@ -538,8 +538,10 @@ def append_hourly(path, year_data, times, year, existing_years):
     n_new = len(times)
     n_nodes = year_data.shape[0]
 
-    epoch = pd.Timestamp('1970-01-01')
-    time_vals = (times - epoch).total_seconds().values / 3600.0
+    # Convert to whatever epoch/calendar this file's `time` variable already
+    # declares, so appends stay consistent even if the file was created
+    # under a different reference epoch than the pipeline's current default.
+    time_vals = nc_metadata.write_times(ds, 'time', times)
 
     print(f'  Appending hourly {year}: {n_nodes:,} nodes × {n_new} steps '
           f'(offset {start})')
@@ -570,7 +572,6 @@ def append_monthly(path, year_data, times, year, existing_years):
     ds = nc.Dataset(str(path), 'a')
     start = ds.dimensions['time'].size
 
-    epoch = pd.Timestamp('1970-01-01')
     n_nodes = year_data.shape[0]
 
     months = sorted(times.month.unique())
@@ -594,7 +595,7 @@ def append_monthly(path, year_data, times, year, existing_years):
 
         # timestamp = first hour of this month
         first_t = times[mask][0]
-        ds.variables['time'][idx] = (first_t - epoch).total_seconds() / 3600.0
+        ds.variables['time'][idx] = nc_metadata.write_times(ds, 'time', [first_t])[0]
 
     nc_metadata.update_time_coverage(ds, times)
     ds.sync()

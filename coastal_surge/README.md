@@ -157,7 +157,7 @@ Both output files follow CF-1.8 conventions. Key variables:
 | Variable | Dimensions | Description |
 |----------|-----------|-------------|
 | `zeta` | (node, time) | Hourly water surface elevation (m) |
-| `time` | (time,) | Hours since 1970-01-01 |
+| `time` | (time,) | Hours since 1900-01-01 |
 | `node_index` | (node,) | 0-based ADCIRC mesh node index |
 | `node_lon/lat` | (node,) | Matched mesh node coordinates |
 | `point_lon/lat` | (node,) | Original CSV point coordinates |
@@ -167,7 +167,7 @@ Both output files follow CF-1.8 conventions. Key variables:
 | Variable | Dimensions | Description |
 |----------|-----------|-------------|
 | `block_max` | (node, block) | 72-hour maximum detided surge (m) |
-| `block_time` | (block,) | Block center time (hours since 1970-01-01) |
+| `block_time` | (block,) | Block center time (hours since 1900-01-01) |
 | `year` | (block,) | Year of simulation |
 | `node_index` | (node,) | 0-based ADCIRC mesh node index |
 | `node_lon/lat` | (node,) | Mesh node coordinates |

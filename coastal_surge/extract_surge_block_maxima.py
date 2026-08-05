@@ -257,9 +257,9 @@ def load_compact_file_meta(compact_path):
     node_lon   = np.array(ds.variables['node_lon'][:], dtype=np.float64)
     node_lat   = np.array(ds.variables['node_lat'][:], dtype=np.float64)
 
-    epoch      = pd.Timestamp('1970-01-01')
-    time_hours = np.array(ds.variables['time'][:], dtype=np.float64)
-    times      = epoch + pd.to_timedelta(time_hours, unit='h')
+    # Read using this file's own units/calendar, not an assumed epoch —
+    # handles compact files written under an older reference epoch.
+    times = nc_metadata.read_times(ds, 'time')
     ds.close()
 
     years = pd.DatetimeIndex(times).year
@@ -569,7 +569,7 @@ def _init_output(output_path, node_index, node_lon, node_lat, constituents,
     v.units     = 'm'
 
     v = ds.createVariable('block_time', 'f8', ('block',))
-    v.units    = 'hours since 1970-01-01 00:00:00'
+    v.units    = nc_metadata.TIME_UNITS
     v.calendar = 'standard'
     v.long_name = f'Center time of {BLOCK_HOURS}-hour block'
 
@@ -606,9 +606,11 @@ def _append_year(output_path, block_maxima, block_times, year):
         ds.variables['block_max'][i:j, start:start + n_new] = \
             block_maxima[i:j, :]
 
-    epoch      = pd.Timestamp('1970-01-01')
-    time_units = ds.variables['block_time'].units
-    time_vals  = nc.date2num(block_times.to_pydatetime(), time_units)
+    # Convert to whatever epoch/calendar this file's `block_time` variable
+    # already declares, so appends stay consistent even if the file was
+    # created under a different reference epoch than the pipeline's current
+    # default.
+    time_vals = nc_metadata.write_times(ds, 'block_time', block_times)
     ds.variables['block_time'][start:start + n_new] = time_vals
     ds.variables['year'][start:start + n_new] = year
 
