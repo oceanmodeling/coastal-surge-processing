@@ -3,9 +3,10 @@
 Shared CF/ACDD-style global metadata for the SurgeMIP pipeline's NetCDF
 outputs.
 
-User-facing fields (institution, contact, project, license, ...) come from
-a YAML file — see metadata_template.yaml for the editable template and a
-description of each field. Fields the user leaves out fall back to whatever
+User-facing fields (institution, contact, creator/researcher identity,
+project, license, forcing, ...) come from a YAML file — see
+metadata_template.yaml for the editable template and a description of each
+field. Fields the user leaves out fall back to whatever
 matching global attributes already exist on the input file being read (e.g.
 an upstream fort.63.nc, or a compact file from an earlier pipeline step),
 then to the DEFAULTS below. Fields that are computed from the data itself
@@ -31,8 +32,18 @@ DEFAULTS = {
     'id': 'SurgeMIP_shoreline_waterlevels',
     'project': 'SurgeMIP',
     'institution': 'Argonne National Laboratory',
+    'institution_id': '',
     'contact': '',
+    'creator_name': '',
+    'creator_id': '',
+    'creator_email': '',
+    'researcher_name': '',
+    'researcher_id': '',
+    'researcher_email': '',
+    'researcher_affiliation': '',
     'source': 'ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing',
+    'forcing': '',
+    'crs': 'WGS84',
     'license': '',
     'acknowledgment': '',
     'references': '',
@@ -46,8 +57,11 @@ DEFAULTS = {
 # GTSMv3 reanalysis reference file this template is based on.
 _ATTR_ORDER = [
     'id', 'project', 'acknowledgment', 'contact',
-    'license', 'institution', 'sea_name', 'source', 'keywords',
-    'standard_name_vocabulary', 'references',
+    'creator_name', 'creator_id', 'creator_email',
+    'researcher_name', 'researcher_id', 'researcher_email',
+    'researcher_affiliation',
+    'license', 'institution', 'institution_id', 'sea_name', 'source',
+    'forcing', 'crs', 'keywords', 'standard_name_vocabulary', 'references',
     'comment',
 ]
 

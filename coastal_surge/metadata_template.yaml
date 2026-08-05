@@ -21,9 +21,21 @@ project: "SurgeMIP"
 # Free-text funding/credit statement.
 acknowledgment: ""
 
-# Point of contact for questions about this dataset, e.g.
-# "Jane Doe <jane.doe@anl.gov>".
+# General point of contact for questions about this dataset, e.g.
+# "Jane Doe <jane.doe@anl.gov>". For attributing specific people/roles,
+# use creator_*/researcher_* below instead.
 contact: ""
+
+# --- Creator (the person/team that produced this specific output file) ---
+creator_name: ""
+creator_id: ""       # e.g. an ORCID URL: "https://orcid.org/0000-0000-0000-0000"
+creator_email: ""
+
+# --- Researcher / PI (the scientist responsible for the underlying study) ---
+researcher_name: ""
+researcher_id: ""     # e.g. an ORCID URL
+researcher_email: ""
+researcher_affiliation: ""
 
 # Data usage license, e.g. "CC-BY-4.0".
 license: ""
@@ -31,12 +43,23 @@ license: ""
 # Organization that produced the data.
 institution: "Argonne National Laboratory"
 
+# Persistent identifier for the institution above, e.g. a ROR URL:
+# "https://ror.org/03qjp1d79".
+institution_id: ""
+
 # Name of the sea/ocean region covered, e.g. "global", "Gulf of Mexico".
 sea_name: "global"
 
-# Model/forcing description, e.g.
+# Model description, e.g.
 # "ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing".
 source: ""
+
+# Atmospheric/tidal forcing dataset(s) driving the model, e.g.
+# "REMO MPI-ESM rcp26 and FES2004".
+forcing: ""
+
+# Horizontal coordinate reference system of the station coordinates.
+crs: "WGS84"
 
 # Semicolon-separated search keywords.
 keywords: "storm surge; coastal flooding; water level; ADCIRC; SurgeMIP"
