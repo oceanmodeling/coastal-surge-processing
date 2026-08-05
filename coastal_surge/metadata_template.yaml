@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# Global NetCDF metadata template for the SurgeMIP surge extraction pipeline.
+#
+# Copy this file, fill in the fields for your run/institution, and pass it
+# to either pipeline script with:
+#
+#   --metadata-yaml path/to/your_metadata.yaml
+#
+# Any field left blank (or omitted entirely) falls back to the built-in
+# default in nc_metadata.py. Fields that describe the data itself rather
+# than its provenance (geospatial extent, time coverage, date_created,
+# title/summary) are computed automatically and are not set here.
+# ---------------------------------------------------------------------------
+
+# Short, unique dataset identifier (no spaces).
+id: "SurgeMIP_shoreline_waterlevels"
+
+# Name of the overarching project/campaign this output belongs to.
+project: "SurgeMIP"
+
+# Free-text funding/credit statement.
+acknowledgment: ""
+
+# Point of contact for questions about this dataset, e.g.
+# "Jane Doe <jane.doe@anl.gov>".
+contact: ""
+
+# Data usage license, e.g. "CC-BY-4.0".
+license: ""
+
+# Organization that produced the data.
+institution: "Argonne National Laboratory"
+
+# Name of the sea/ocean region covered, e.g. "global", "Gulf of Mexico".
+sea_name: "global"
+
+# Model/forcing description, e.g.
+# "ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing".
+source: ""
+
+# Semicolon-separated search keywords.
+keywords: "storm surge; coastal flooding; water level; ADCIRC; SurgeMIP"
+
+# CF standard name table version used by variable `standard_name` attributes.
+standard_name_vocabulary: "CF Standard Name Table"
+
+# Citable reference(s) for the model/methodology, e.g. a DOI or paper.
+references: ""
+
+# Free-text field for anything else worth noting about this run.
+comment: ""

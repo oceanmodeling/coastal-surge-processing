@@ -78,6 +78,8 @@ import netCDF4 as nc
 import numpy as np
 import pandas as pd
 
+import nc_metadata
+
 # Import tidal constituent list from the SurgeMIP community detide library.
 # This library lives in third_party/detide (git submodule).
 sys.path.insert(
@@ -122,6 +124,13 @@ def parse_args():
         help=f'Timesteps per slab read (default: {BLOCK_HOURS}, must be a '
              f'multiple of {BLOCK_HOURS}).  Larger values reduce I/O overhead '
              f'at the cost of more memory.',
+    )
+    p.add_argument(
+        '--metadata-yaml',
+        help='Path to a YAML file with global NetCDF metadata (institution, '
+             'contact, project, license, ...). See metadata_template.yaml '
+             'for the editable template. Fields not present fall back to '
+             'built-in defaults.',
     )
     args = p.parse_args()
     if args.batch_size % BLOCK_HOURS != 0:
@@ -382,7 +391,7 @@ def _accumulate_year(compact_path, local_positions, A, ATA, ATY,
 
 def run_phase2(compact_path, times_by_year, local_positions, C,
                global_t0, constituents, total_hours, output_path,
-               batch_size, force):
+               batch_size, force, metadata):
     """
     Subtract tidal prediction and compute 72-hour block maxima for each year.
     """
@@ -437,7 +446,7 @@ def run_phase2(compact_path, times_by_year, local_positions, C,
             ds0.close()
             _init_output(output_path, node_index[local_positions],
                          node_lon[local_positions], node_lat[local_positions],
-                         constituents)
+                         constituents, metadata)
 
         _append_year(output_path, bm, bt, year)
 
@@ -512,7 +521,8 @@ def _get_existing_years(output_path):
         if years_str else set()
 
 
-def _init_output(output_path, node_index, node_lon, node_lat, constituents):
+def _init_output(output_path, node_index, node_lon, node_lat, constituents,
+                 metadata):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     n_nodes = len(node_index)
 
@@ -520,14 +530,26 @@ def _init_output(output_path, node_index, node_lon, node_lat, constituents):
     ds.createDimension('node',  n_nodes)
     ds.createDimension('block', None)   # unlimited
 
-    ds.title              = 'SurgeMIP 72-hour detided surge block maxima'
-    ds.block_hours        = BLOCK_HOURS
-    ds.extracted_years    = ''
-    ds.detiding_method    = (
-        'Vectorized linear least-squares harmonic analysis across all years. '
-        'Tidal coefficients: C = (A^T A)^{-1} A^T Y. Nodal corrections every '
-        f'{PARTITION_HOURS}h via pytides2.')
-    ds.detiding_constituents = ', '.join(c.name for c in constituents)
+    extra = {
+        'block_hours': BLOCK_HOURS,
+        'extracted_years': '',
+        'detiding_method': (
+            'Vectorized linear least-squares harmonic analysis across all '
+            'years. Tidal coefficients: C = (A^T A)^{-1} A^T Y. Nodal '
+            f'corrections every {PARTITION_HOURS}h via pytides2.'),
+        'detiding_constituents': ', '.join(c.name for c in constituents),
+    }
+    nc_metadata.set_global_attrs(
+        ds, metadata,
+        title='SurgeMIP 72-hour detided surge block maxima',
+        summary=('72-hour block maxima of nontidal surge, computed by '
+                 'subtracting a least-squares tidal harmonic fit from '
+                 'hourly ADCIRC water levels at the official SurgeMIP '
+                 'shoreline points.'),
+        feature_type='timeSeries',
+        extra=extra,
+    )
+    nc_metadata.set_geospatial_extent(ds, node_lon, node_lat)
 
     for name, data, units in [
         ('node_index', node_index.astype(np.int32), None),
@@ -590,6 +612,7 @@ def _append_year(output_path, block_maxima, block_times, year):
     ds.variables['block_time'][start:start + n_new] = time_vals
     ds.variables['year'][start:start + n_new] = year
 
+    nc_metadata.update_time_coverage(ds, block_times)
     ds.sync()
     committed.add(year)
     ds.extracted_years = ','.join(str(y) for y in sorted(committed))
@@ -667,6 +690,13 @@ def main():
         print(f'Compact file not found: {compact_path}')
         sys.exit(1)
 
+    # Inherit any matching global attrs already present on the compact
+    # hourly file (set by extract_outputs_to_shoreline_pts.py) when no
+    # --metadata-yaml is given, or to fill gaps left by one.
+    source_attrs = nc_metadata.read_known_attrs(compact_path)
+    metadata = nc_metadata.load_metadata(args.metadata_yaml,
+                                         source_attrs=source_attrs)
+
     node_index, node_lon, node_lat, times_by_year = \
         load_compact_file_meta(compact_path)
 
@@ -685,7 +715,7 @@ def main():
     print(f'{"="*60}')
     run_phase2(compact_path, times_by_year, local_positions, C,
                global_t0, constituents, total_hours, output_path,
-               batch_size, args.force)
+               batch_size, args.force, metadata)
 
     # Remove Phase 1 checkpoint on successful completion
     ckpt = checkpoint_path(output_path)

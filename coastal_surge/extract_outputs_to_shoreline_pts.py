@@ -51,12 +51,10 @@ import netCDF4 as nc
 import numpy as np
 import pandas as pd
 
+import nc_metadata
 
 # CF standard fill value for float32
 CF_FILL_F32 = 9.96921e+36
-
-INSTITUTION = 'Argonne National Laboratory'
-SOURCE = 'ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing'
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +103,13 @@ def parse_args():
              'When supplied, the KDTree is restricted to always-wet nodes only, '
              'preventing CSV points from being matched to intermittently-dry '
              'floodplain nodes.',
+    )
+    p.add_argument(
+        '--metadata-yaml',
+        help='Path to a YAML file with global NetCDF metadata (institution, '
+             'contact, project, license, ...). See metadata_template.yaml '
+             'for the editable template. Fields not present fall back to '
+             'built-in defaults.',
     )
     return p.parse_args()
 
@@ -317,20 +322,16 @@ def _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
     v[:] = dist_km.astype(np.float32)
 
 
-def _set_global_attrs(ds, title, extra_attrs, csv_name):
-    ds.Conventions = 'CF-1.8'
-    ds.title = title
-    ds.institution = INSTITUTION
-    ds.source = SOURCE
-    ds.featureType = 'timeSeries'
-    ds.source_csv = csv_name
-    ds.extracted_years = ''
-    for k, v in extra_attrs.items():
-        setattr(ds, k, v)
+def _set_global_attrs(ds, title, summary, metadata, extra_attrs, csv_name):
+    extra = {'source_csv': csv_name, 'extracted_years': ''}
+    extra.update(extra_attrs)
+    nc_metadata.set_global_attrs(ds, metadata, title=title, summary=summary,
+                                 feature_type='timeSeries', extra=extra)
 
 
 def init_hourly_output(path, n_nodes, node_index, node_lon, node_lat,
-                        node_depth, point_lon, point_lat, dist_km, csv_name):
+                        node_depth, point_lon, point_lat, dist_km, csv_name,
+                        metadata):
     """Create the hourly output NetCDF."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -340,6 +341,10 @@ def init_hourly_output(path, n_nodes, node_index, node_lon, node_lat,
         ds,
         title=('STOFS2D-Global hourly water surface elevation at '
                'SurgeMIP official shoreline'),
+        summary=('Hourly total water surface elevation extracted from '
+                 'ADCIRC fort.63.nc output at the official SurgeMIP '
+                 'shoreline points.'),
+        metadata=metadata,
         extra_attrs={},
         csv_name=csv_name,
     )
@@ -364,12 +369,15 @@ def init_hourly_output(path, n_nodes, node_index, node_lon, node_lat,
 
     _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
                          point_lon, point_lat, dist_km)
+    nc_metadata.set_geospatial_extent(ds, node_lon, node_lat, node_depth,
+                                      positive='down')
     ds.close()
     print(f'Created hourly output: {out}')
 
 
 def init_monthly_output(path, n_nodes, node_index, node_lon, node_lat,
-                         node_depth, point_lon, point_lat, dist_km, csv_name):
+                         node_depth, point_lon, point_lat, dist_km, csv_name,
+                         metadata):
     """Create the monthly maxima output NetCDF."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -379,6 +387,10 @@ def init_monthly_output(path, n_nodes, node_index, node_lon, node_lat,
         ds,
         title=('STOFS2D-Global monthly maximum water surface elevation at '
                'SurgeMIP official shoreline'),
+        summary=('Monthly maximum total water surface elevation, computed '
+                 'from hourly ADCIRC fort.63.nc output at the official '
+                 'SurgeMIP shoreline points.'),
+        metadata=metadata,
         extra_attrs={},
         csv_name=csv_name,
     )
@@ -411,6 +423,8 @@ def init_monthly_output(path, n_nodes, node_index, node_lon, node_lat,
 
     _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
                          point_lon, point_lat, dist_km)
+    nc_metadata.set_geospatial_extent(ds, node_lon, node_lat, node_depth,
+                                      positive='down')
     ds.close()
     print(f'Created monthly output: {out}')
 
@@ -539,6 +553,7 @@ def append_hourly(path, year_data, times, year, existing_years):
         j = min(i + chunk, n_nodes)
         ds.variables['zeta'][i:j, start:start + n_new] = year_data[i:j, :]
 
+    nc_metadata.update_time_coverage(ds, times)
     ds.sync()
     existing_years.add(year)
     ds.extracted_years = ','.join(str(y) for y in sorted(existing_years))
@@ -581,6 +596,7 @@ def append_monthly(path, year_data, times, year, existing_years):
         first_t = times[mask][0]
         ds.variables['time'][idx] = (first_t - epoch).total_seconds() / 3600.0
 
+    nc_metadata.update_time_coverage(ds, times)
     ds.sync()
     existing_years.add(year)
     ds.extracted_years = ','.join(str(y) for y in sorted(existing_years))
@@ -618,6 +634,13 @@ def main():
                 sys.exit(1)
             file_list.append((get_adcirc_year(p), p))
         file_list.sort(key=lambda x: x[0])
+
+    # Inherit any matching global attrs already present on the source
+    # fort.63.nc (e.g. institution/source set by the ADCIRC run) when no
+    # --metadata-yaml is given, or to fill gaps left by one.
+    source_attrs = nc_metadata.read_known_attrs(file_list[0][1])
+    metadata = nc_metadata.load_metadata(args.metadata_yaml,
+                                         source_attrs=source_attrs)
 
     # --- Match official points to mesh (uses first fort.63.nc for geometry) ---
     (node_index, node_lon, node_lat, node_depth,
@@ -679,13 +702,13 @@ def main():
         init_hourly_output(
             hourly_path, n_nodes,
             node_index, node_lon_csv, node_lat_csv, node_depth_csv,
-            point_lon_csv, point_lat_csv, dist_km_csv, csv_name)
+            point_lon_csv, point_lat_csv, dist_km_csv, csv_name, metadata)
 
     if not monthly_path.exists():
         init_monthly_output(
             monthly_path, n_nodes,
             node_index, node_lon_csv, node_lat_csv, node_depth_csv,
-            point_lon_csv, point_lat_csv, dist_km_csv, csv_name)
+            point_lon_csv, point_lat_csv, dist_km_csv, csv_name, metadata)
 
     # --- Extract each year ---
     total_t0 = timer.time()

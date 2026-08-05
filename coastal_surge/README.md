@@ -12,6 +12,8 @@ Two-step pipeline for extracting 72-hour detided surge block maxima at the
 | `extract_outputs_to_shoreline_pts.py` | Step 1: extract hourly water levels from fort.63.nc |
 | `extract_surge_block_maxima.py` | Step 2: fit tides and compute surge block maxima |
 | `coastal_points_gsshs_low_20km_35k-pts.csv` | Official SurgeMIP 35k shoreline point locations |
+| `nc_metadata.py` | Shared helper for CF/ACDD-style global NetCDF metadata |
+| `metadata_template.yaml` | Editable template for institution/contact/license/etc. metadata |
 
 ---
 
@@ -22,6 +24,7 @@ numpy
 netCDF4
 pandas
 scipy
+pyyaml
 pytides2    # pip install git+https://github.com/tomsail/pytides.git
 detide      # git submodule: github.com/oceanmodeling/detide
 ```
@@ -111,6 +114,38 @@ year of block maxima in RAM (~35k × 122 blocks × 4 bytes ≈ 17 MB).
 each year. Phase 2 appends per year with the completed year list stored in
 the output file's `extracted_years` global attribute. Both phases skip
 already-completed years on restart.
+
+---
+
+## NetCDF metadata
+
+Both scripts accept an optional `--metadata-yaml path/to/file.yaml` flag
+that fills in CF/ACDD-style global attributes (institution, contact,
+project, license, keywords, ...) on every output file. Copy
+`metadata_template.yaml`, fill in your details, and pass it in:
+
+```bash
+python extract_outputs_to_shoreline_pts.py ... --metadata-yaml my_metadata.yaml
+python extract_surge_block_maxima.py       ... --metadata-yaml my_metadata.yaml
+```
+
+If `--metadata-yaml` is omitted entirely, both scripts still check the
+input file they're reading for matching global attributes and copy those
+over automatically:
+- Step 1 checks the first `fort.63.nc` it reads.
+- Step 2 checks the compact hourly file from Step 1 — so metadata set (or
+  inherited) in Step 1 propagates to Step 2's output for free.
+
+Precedence is: built-in defaults → attributes copied from the input file →
+fields set in `--metadata-yaml`. A YAML file always wins if you want to
+override what an input file already has. (The `id` field is never
+auto-copied, since it's meant to uniquely identify each output product.)
+
+Any field still left blank falls back to a built-in default (see
+`nc_metadata.py`). Fields that describe the data itself rather than its
+provenance — `geospatial_lat/lon/vertical_min/max`, `time_coverage_start/
+end`, `date_created`, `title`, `summary` — are computed automatically from
+the extracted data and are not part of the YAML template.
 
 ---
 
