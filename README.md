@@ -12,7 +12,8 @@ python coastal_surge/extract_outputs_to_shoreline_pts.py \
     --points-csv ./data/coastal_points_gsshs_low_20km_35k-pts.csv \
     --adcirc-dir /path/to/output/CFS-reanalysis/ \
     --output-hourly  /path/to/cfs_reanalysis_35k_hourly.nc \
-    --output-monthly /path/to/cfs_reanalysis_35k_monthly_max.nc
+    --output-monthly /path/to/cfs_reanalysis_35k_monthly_max.nc \
+    --metadata-yaml  coastal_surge/metadata_template.yaml
 
 python coastal_surge/extract_surge_block_maxima.py \
     --compact-file /path/to/cfs_reanalysis_35k_hourly.nc \
