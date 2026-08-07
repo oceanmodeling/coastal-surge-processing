@@ -19,11 +19,11 @@ Algorithm (two-phase, restart-safe):
 
   Phase 1 — Tidal fit (streams through all years once):
       Builds a vectorized linear tidal design matrix A for each year using
-      pytides2 (speeds, nodal factors, equilibrium arguments for all 29
-      SurgeMIP constituents).  Accumulates the normal equations
+      pytides2 (speeds, nodal factors, equilibrium arguments for all 67
+      EXTENDED constituents).  Accumulates the normal equations
 
-          A^T A   (n_coefs × n_coefs,  tiny — ~60×60)
-          A^T Y   (n_coefs × n_nodes,  ~16 MB for 35k nodes)
+          A^T A   (n_coefs × n_coefs,  tiny — ~136×136)
+          A^T Y   (n_coefs × n_nodes,  ~37 MB for 35k nodes)
 
       across all years, then solves once for the tidal coefficient matrix
 
@@ -41,11 +41,11 @@ Algorithm (two-phase, restart-safe):
       per-year for restart safety.
 
 Tidal model:
-  Uses the 29-constituent FULL set from the SurgeMIP detide library
-  (github.com/oceanmodeling/detide), identical to the set used in the
-  SurgeMIP community detiding tools, so results are consistent across
-  participants.  Nodal corrections are evaluated every PARTITION_HOURS=240h
-  following pytides2 convention.
+  Uses the 67-constituent EXTENDED set from the `detide_extended_constituents`
+  submodule (github.com/WPringle/detide, branch adding-extended-constituents),
+  which allows for better analysis in some shallow regions and high latitude
+  regions where seasonal influences are important. Nodal corrections are
+  evaluated every PARTITION_HOURS=240h following pytides2 convention.
 
 Usage:
   python extract_surge_block_maxima.py \\
@@ -65,8 +65,8 @@ Usage:
 
 Dependencies:
   numpy, netCDF4, pandas,
-  pytides2  (pip install git+https://github.com/tomsail/pytides.git)
-  detide    (git submodule: third_party/detide)
+  pytides2  (pip install git+https://github.com/WPringle/pytides.git@add-tidal-constituents)
+  detide    (git submodule: detide_extended_constituents, at the repo root)
 """
 
 import argparse
@@ -81,10 +81,12 @@ import pandas as pd
 import nc_metadata
 
 # Import tidal constituent list from the SurgeMIP community detide library.
-# This library lives in third_party/detide (git submodule).
+# This library lives in detide_extended_constituents (git submodule, at the
+# repo root — sibling of this script's coastal_surge/ directory), pointing
+# at github.com/WPringle/detide, branch adding-extended-constituents.
 sys.path.insert(
-    0, str(Path(__file__).resolve().parent / 'third_party' / 'detide'))
-from detide.constants import FULL as TIDAL_CONSTITUENTS
+    0, str(Path(__file__).resolve().parent.parent / 'detide_extended_constituents'))
+from detide.constants import EXTENDED as TIDAL_CONSTITUENTS
 from pytides2.astro import astro
 from pytides2.tide import Tide
 

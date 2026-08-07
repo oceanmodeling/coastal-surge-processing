@@ -25,14 +25,28 @@ netCDF4
 pandas
 scipy
 pyyaml
-pytides2    # pip install git+https://github.com/tomsail/pytides.git
-detide      # git submodule: github.com/oceanmodeling/detide
+pytides2    # pip install git+https://github.com/WPringle/pytides.git@add-tidal-constituents
+detide      # git submodule: detide_extended_constituents
 ```
 
-The `detide` library provides the tidal constituent set. It should be
-cloned/placed at `third_party/detide` relative to the scripts, or you can
-edit the `sys.path.insert` line in `extract_surge_block_maxima.py` to point
-at your local copy.
+The `detide` library provides the tidal constituent sets used for harmonic
+analysis. It's tracked as the `detide_extended_constituents` git submodule
+at the repo root (sibling of this `coastal_surge/` directory), pointing at
+[github.com/WPringle/detide](https://github.com/WPringle/detide), branch
+`adding-extended-constituents`. Initialize it with:
+
+```bash
+git submodule update --init --recursive
+```
+
+`extract_surge_block_maxima.py` adds `<repo_root>/detide_extended_constituents`
+to `sys.path` and imports `detide.constants.EXTENDED` from it — the
+67-constituent extended set (see **Tidal model** below). If you relocate the
+submodule, edit the `sys.path.insert` line in that script to match.
+
+Install the `pytides2` fork above to match what `detide_extended_constituents`'s
+own `pyproject.toml` pins, so your environment stays consistent with the
+submodule.
 
 ---
 
@@ -84,13 +98,14 @@ Includes `block_time` (center time of each block) and `year` variables.
 ~700 MB for 46 years.
 
 **Tidal model:** Vectorized linear least-squares harmonic analysis using
-the 29-constituent FULL set from the SurgeMIP detide library. Constituents
+the 67-constituent EXTENDED set from the `detide_extended_constituents`
+submodule, which allows for better analysis in some shallow regions and
+high latitude regions where seasonal influences are important. Constituents
 with fewer than 2 complete cycles over the full simulation period are
 excluded. Speeds, nodal factors, and equilibrium arguments are computed via
 pytides2, with nodal corrections updated every 240 hours following the
-pytides2 convention. This approach is equivalent to the SurgeMIP community
-detiding tools but scales to 35k nodes simultaneously rather than fitting
-one node at a time.
+pytides2 convention. This approach scales to 35k nodes simultaneously
+rather than fitting one node at a time.
 
 **Algorithm:**
 
@@ -98,7 +113,7 @@ one node at a time.
 For each year, builds the tidal design matrix A and accumulates the normal
 equations (AᵀA and AᵀY) across all years. After all years are processed,
 solves C = (AᵀA)⁻¹AᵀY once to obtain tidal coefficients at all 35k nodes
-simultaneously. AᵀA is ~60×60 (tiny); AᵀY is ~60×35k (~16 MB). A Phase 1
+simultaneously. AᵀA is ~136×136 (tiny); AᵀY is ~136×35k (~36 MB). A Phase 1
 checkpoint is saved after each year so a killed job can resume.
 
 *Phase 2 — Surge block maxima:*
@@ -107,7 +122,7 @@ Re-reads each year's compact data, subtracts the tidal prediction
 surge residual. Results are appended to the output file year by year, so
 partial runs can be safely resumed.
 
-**Memory:** Phase 1 uses ~16 MB for AᵀY (negligible). Phase 2 holds one
+**Memory:** Phase 1 uses ~36 MB for AᵀY (negligible). Phase 2 holds one
 year of block maxima in RAM (~35k × 122 blocks × 4 bytes ≈ 17 MB).
 
 **Restart safety:** Phase 1 checkpoints to `*.tidal_checkpoint.npz` after

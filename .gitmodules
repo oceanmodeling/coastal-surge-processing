@@ -1,0 +1,4 @@
+[submodule "detide_extended_constituents"]
+	path = detide_extended_constituents
+	url = git@github.com:WPringle/detide.git
+	branch = adding-extended-constituents
