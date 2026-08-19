@@ -231,7 +231,10 @@ def read_times(ds, varname='time'):
     var = ds.variables[varname]
     calendar = getattr(var, 'calendar', 'standard')
     cftime_dates = nc.num2date(var[:], var.units, calendar)
-    return pd.to_datetime([d.isoformat() for d in cftime_dates])
+    try:
+        return pd.to_datetime([d.isoformat() for d in cftime_dates])
+    except Exception:
+        return pd.to_datetime([d.isoformat() for d in cftime_dates], format='ISO8601')
 
 
 def write_times(ds, varname, times):
