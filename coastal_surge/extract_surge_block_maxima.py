@@ -460,10 +460,16 @@ def run_phase2(compact_path, times_by_year, local_positions, C,
         if not Path(output_path).exists():
             # node_index and coords come from the first local_positions call
             ds0 = nc.Dataset(str(compact_path), 'r')
-            node_index = np.array(ds0.variables['node_index'][:],
-                                  dtype=np.int64) - 1
             node_lon   = np.array(ds0.variables['node_lon'][:])
             node_lat   = np.array(ds0.variables['node_lat'][:])
+
+            if 'node_index' not in ds0.variables:
+                node_index = np.array(range(len(node_lon)))
+            else:
+                node_index = np.array(ds0.variables['node_index'][:], 
+                                      dtype=np.int64) - 1
+
+
             ds0.close()
             _init_output(output_path, node_index[local_positions],
                          node_lon[local_positions], node_lat[local_positions],
