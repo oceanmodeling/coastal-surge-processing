@@ -485,6 +485,12 @@ def _extract_block_maxima(compact_path, local_positions, A, C,
     """Extract surge block maxima for one year from the compact file."""
     ds       = nc.Dataset(str(compact_path), 'r')
     zeta_var = ds.variables['zeta']
+
+    dims = tuple(ds.dimensions)
+    transpose = False
+    if dims == ("time", "node"):
+        transpose = True
+
     n_times  = len(year_times)
     n_nodes  = len(local_positions)
     n_blocks = (n_times + BLOCK_HOURS - 1) // BLOCK_HOURS
@@ -502,9 +508,20 @@ def _extract_block_maxima(compact_path, local_positions, A, C,
         t_e = min(b_e * BLOCK_HOURS, n_times)
         B   = t_e - t_s
 
+        
+        if transpose:
+            selection = (slice(t_offset + t_s, t_offset + t_e), local_positions)
+        else:
+            selection = (local_positions, slice(t_offset + t_s, t_offset + t_e))
+ 
+
         slab = np.array(
-            zeta_var[local_positions, t_offset + t_s:t_offset + t_e],
+            zeta_var[selection],
             dtype=np.float64)                    # [n_nodes, B]
+
+        if transpose:
+            slab = slab.T
+
         vals = slab.T                            # [B, n_nodes]
         del slab
         valid = vals < CF_FILL_F32 / 2          # [B, n_nodes]
