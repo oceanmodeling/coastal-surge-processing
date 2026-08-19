@@ -363,6 +363,11 @@ def _accumulate_year(compact_path, local_positions, A, ATA, ATY,
                      batch_size, t_offset):
     """Accumulate one year's normal equations from the compact file."""
     ds       = nc.Dataset(str(compact_path), 'r')
+    dims = tuple(ds.dimensions)
+    transpose = False
+    if dims == ("time", "node"):
+        transpose = True
+
     zeta_var = ds.variables['zeta']   # (node, time)
     n_times  = A.shape[0]
 
@@ -373,9 +378,19 @@ def _accumulate_year(compact_path, local_positions, A, ATA, ATY,
 
     for t_s in range(0, n_times, batch_size):
         t_e  = min(t_s + batch_size, n_times)
+        if transpose:
+            selection = (slice(t_offset + t_s, t_offset + t_e), local_positions)
+        else:
+            selection = (local_positions, slice(t_offset + t_s, t_offset + t_e))
+        
         slab = np.array(
-            zeta_var[local_positions, t_offset + t_s:t_offset + t_e],
+            zeta_var[selection],
             dtype=np.float64)                    # [n_nodes, B]
+        
+        if transpose:
+            slab = slab.T
+
+
         vals = slab.T                            # [B, n_nodes]
         del slab
         vals[vals > CF_FILL_F32 / 2] = 0.0      # zero-out dry sentinels
