@@ -1,6 +1,6 @@
 [project]
 authors = [{name = "William Pringle", email = "wpringle@anl.gov"}]
-dependencies = []
+dependencies = ["pytides2 @ git+https://github.com/WPringle/pytides.git@add-tidal-constituents"]
 name = "coastal-surge-processing"
 requires-python = ">= 3.11"
 version = "0.1.0"
@@ -8,6 +8,9 @@ version = "0.1.0"
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
