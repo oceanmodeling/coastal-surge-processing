@@ -255,10 +255,14 @@ def load_compact_file_meta(compact_path):
     times_by_year : dict {year: pd.DatetimeIndex}
     """
     ds = nc.Dataset(str(compact_path), 'r')
-    node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - 1
     node_lon   = np.array(ds.variables['node_lon'][:], dtype=np.float64)
     node_lat   = np.array(ds.variables['node_lat'][:], dtype=np.float64)
 
+    if 'node_index' not in ds.variables:
+        node_index = np.array(range(len(node_lon)))
+    else:
+        node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - 1
+ 
     # Read using this file's own units/calendar, not an assumed epoch —
     # handles compact files written under an older reference epoch.
     times = nc_metadata.read_times(ds, 'time')
