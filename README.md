@@ -8,14 +8,19 @@ Created as part of the _Surge Model Intercomparison Project_
 ## Quick start
 
 ```bash
-python coastal_surge/extract_outputs_to_shoreline_pts.py \
+# install pixi on your system: https://pixi.prefix.dev/latest/installation/
+git clone https://github.com/oceanmodeling/coastal-surge-processing.git 
+git submodule update --init
+pixi install
+
+pixi run python coastal_surge/extract_outputs_to_shoreline_pts.py \
     --points-csv ./data/coastal_points_gsshs_low_20km_35k-pts.csv \
     --adcirc-dir /path/to/output/CFS-reanalysis/ \
     --output-hourly  /path/to/cfs_reanalysis_35k_hourly.nc \
     --output-monthly /path/to/cfs_reanalysis_35k_monthly_max.nc \
     --metadata-yaml  coastal_surge/metadata_template.yaml
 
-python coastal_surge/extract_surge_block_maxima.py \
+pixi run python coastal_surge/extract_surge_block_maxima.py \
     --compact-file /path/to/cfs_reanalysis_35k_hourly.nc \
     --output       /path/to/cfs_reanalysis_detided_35k.nc
 ```

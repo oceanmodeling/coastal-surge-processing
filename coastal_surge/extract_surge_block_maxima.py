@@ -255,10 +255,14 @@ def load_compact_file_meta(compact_path):
     times_by_year : dict {year: pd.DatetimeIndex}
     """
     ds = nc.Dataset(str(compact_path), 'r')
-    node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - 1
     node_lon   = np.array(ds.variables['node_lon'][:], dtype=np.float64)
     node_lat   = np.array(ds.variables['node_lat'][:], dtype=np.float64)
 
+    if 'node_index' not in ds.variables:
+        node_index = np.array(range(len(node_lon)))
+    else:
+        node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - 1
+ 
     # Read using this file's own units/calendar, not an assumed epoch —
     # handles compact files written under an older reference epoch.
     times = nc_metadata.read_times(ds, 'time')
@@ -359,6 +363,11 @@ def _accumulate_year(compact_path, local_positions, A, ATA, ATY,
                      batch_size, t_offset):
     """Accumulate one year's normal equations from the compact file."""
     ds       = nc.Dataset(str(compact_path), 'r')
+    dims = tuple(ds.dimensions)
+    transpose = False
+    if dims == ("time", "node"):
+        transpose = True
+
     zeta_var = ds.variables['zeta']   # (node, time)
     n_times  = A.shape[0]
 
@@ -369,9 +378,19 @@ def _accumulate_year(compact_path, local_positions, A, ATA, ATY,
 
     for t_s in range(0, n_times, batch_size):
         t_e  = min(t_s + batch_size, n_times)
+        if transpose:
+            selection = (slice(t_offset + t_s, t_offset + t_e), local_positions)
+        else:
+            selection = (local_positions, slice(t_offset + t_s, t_offset + t_e))
+        
         slab = np.array(
-            zeta_var[local_positions, t_offset + t_s:t_offset + t_e],
+            zeta_var[selection],
             dtype=np.float64)                    # [n_nodes, B]
+        
+        if transpose:
+            slab = slab.T
+
+
         vals = slab.T                            # [B, n_nodes]
         del slab
         vals[vals > CF_FILL_F32 / 2] = 0.0      # zero-out dry sentinels
@@ -441,10 +460,16 @@ def run_phase2(compact_path, times_by_year, local_positions, C,
         if not Path(output_path).exists():
             # node_index and coords come from the first local_positions call
             ds0 = nc.Dataset(str(compact_path), 'r')
-            node_index = np.array(ds0.variables['node_index'][:],
-                                  dtype=np.int64) - 1
             node_lon   = np.array(ds0.variables['node_lon'][:])
             node_lat   = np.array(ds0.variables['node_lat'][:])
+
+            if 'node_index' not in ds0.variables:
+                node_index = np.array(range(len(node_lon)))
+            else:
+                node_index = np.array(ds0.variables['node_index'][:], 
+                                      dtype=np.int64) - 1
+
+
             ds0.close()
             _init_output(output_path, node_index[local_positions],
                          node_lon[local_positions], node_lat[local_positions],
@@ -460,6 +485,12 @@ def _extract_block_maxima(compact_path, local_positions, A, C,
     """Extract surge block maxima for one year from the compact file."""
     ds       = nc.Dataset(str(compact_path), 'r')
     zeta_var = ds.variables['zeta']
+
+    dims = tuple(ds.dimensions)
+    transpose = False
+    if dims == ("time", "node"):
+        transpose = True
+
     n_times  = len(year_times)
     n_nodes  = len(local_positions)
     n_blocks = (n_times + BLOCK_HOURS - 1) // BLOCK_HOURS
@@ -477,9 +508,20 @@ def _extract_block_maxima(compact_path, local_positions, A, C,
         t_e = min(b_e * BLOCK_HOURS, n_times)
         B   = t_e - t_s
 
+        
+        if transpose:
+            selection = (slice(t_offset + t_s, t_offset + t_e), local_positions)
+        else:
+            selection = (local_positions, slice(t_offset + t_s, t_offset + t_e))
+ 
+
         slab = np.array(
-            zeta_var[local_positions, t_offset + t_s:t_offset + t_e],
+            zeta_var[selection],
             dtype=np.float64)                    # [n_nodes, B]
+
+        if transpose:
+            slab = slab.T
+
         vals = slab.T                            # [B, n_nodes]
         del slab
         valid = vals < CF_FILL_F32 / 2          # [B, n_nodes]
