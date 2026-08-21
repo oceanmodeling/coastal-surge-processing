@@ -229,6 +229,7 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
         summary=(f'Monthly maximum {var_def["long_name"].lower()}, computed '
                  f'from hourly values at the official SurgeMIP shoreline '
                  f'points, over the full simulation period.'),
+        timestep='MonthlyMax', variable_key=variable_key,
         feature_type='timeSeries',
         extra={
             'source_csv': node['source_csv'],

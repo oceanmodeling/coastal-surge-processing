@@ -10,12 +10,13 @@ field. Fields the user leaves out fall back to whatever
 matching global attributes already exist on the input file being read (e.g.
 an upstream fort.63.nc, or a compact file from an earlier pipeline step),
 then to the DEFAULTS below. Fields that are computed from the data itself
-(geospatial extent, time coverage, date_created) are set separately by
+(geospatial extent, time coverage, creation_date) are set separately by
 set_geospatial_extent() and update_time_coverage(), since they can't come
 from a static YAML file or be copied from an input file.
 """
 
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,7 +35,6 @@ DEFAULTS = {
     'id': 'SurgeMIP_shoreline_waterlevels',
     'project': 'SurgeMIP',
     'institution': 'Argonne National Laboratory',
-    'institution_id': '',
     'contact': '',
     'creator_name': '',
     'creator_id': '',
@@ -53,9 +53,19 @@ DEFAULTS = {
     'sea_name': 'global',
     'keywords': 'storm surge; coastal flooding; water level; ADCIRC; SurgeMIP',
     'standard_name_vocabulary': 'CF Standard Name Table',
+    # CMIP6-style global attributes (see
+    # http://goo.gl/v1drZl, "CMIP6 Global Attributes, DRS, Filenames,
+    # Directory Structure, and CV's") that don't already have a SurgeMIP
+    # equivalent below. realm/further_info_url are free text here rather
+    # than drawn from the official CMIP6 controlled vocabularies, since
+    # SurgeMIP isn't a registered CMIP6 activity.
+    'realm': 'ocean',
+    'further_info_url': '',
     # Short, filename-safe tokens used to build the SurgeMIP output filename
-    # convention (see NAMING_FIELDS/build_filename below). Distinct from the
-    # free-text institution/forcing/source provenance fields above.
+    # convention (see NAMING_FIELDS/build_filename below), and — via
+    # set_global_attrs() — the CMIP6-style institution_id/source_id/
+    # experiment_id global attributes. Distinct from the free-text
+    # institution/forcing/source provenance fields above.
     'group_name': '',
     'climate_forcing': '',
     'scenario': '',
@@ -87,16 +97,22 @@ VARIABLES = {
 NAMING_FIELDS = ['group_name', 'climate_forcing', 'scenario', 'location']
 
 # Order in which global attributes are written, matching the style of the
-# GTSMv3 reanalysis reference file this template is based on.
+# GTSMv3 reanalysis reference file this template is based on, with CMIP6-
+# style attributes (institution_id, source_id, experiment_id, realm,
+# product, frequency, table_id, variable_id — see set_global_attrs) placed
+# near their Table-1 counterparts at http://goo.gl/v1drZl. institution_id/
+# source_id/experiment_id are computed from group_name/climate_forcing/
+# scenario rather than listed separately here, to avoid writing the same
+# value under two different attribute names.
 _ATTR_ORDER = [
     'id', 'project', 'acknowledgment', 'contact',
     'creator_name', 'creator_id', 'creator_email',
     'researcher_name', 'researcher_id', 'researcher_email',
     'researcher_affiliation',
-    'license', 'institution', 'institution_id', 'sea_name', 'source',
-    'forcing', 'crs', 'keywords', 'standard_name_vocabulary', 'references',
-    'comment',
-    'group_name', 'climate_forcing', 'scenario', 'location',
+    'license', 'institution', 'institution_id', 'further_info_url',
+    'sea_name', 'source', 'source_id', 'forcing', 'experiment_id', 'crs',
+    'realm', 'product', 'frequency', 'table_id', 'variable_id', 'location',
+    'keywords', 'standard_name_vocabulary', 'references', 'comment',
 ]
 
 # Fields eligible for auto-copy from an input file's global attributes.
@@ -314,10 +330,31 @@ def build_filename(metadata, timestep, variable_key, year_or_range):
     return '_'.join(parts) + '.nc'
 
 
-def set_global_attrs(ds, metadata, *, title, summary, feature_type='timeSeries',
-                     extra=None):
+# CMIP6 "frequency" CV token (http://goo.gl/v1drZl) for each SurgeMIP
+# timestep. Used to derive the `frequency` global attribute in
+# set_global_attrs(); extend this if a new timestep is introduced.
+_TIMESTEP_TO_FREQUENCY = {
+    'Hourly': '1hr',
+    'MonthlyMax': 'mon',
+}
+
+
+def set_global_attrs(ds, metadata, *, title, summary, timestep, variable_key,
+                     feature_type='timeSeries', extra=None):
     """
-    Write CF/ACDD-style global attributes to a freshly-created netCDF4 Dataset.
+    Write CF/ACDD- and CMIP6-style global attributes to a freshly-created
+    netCDF4 Dataset. The CMIP6-style attributes follow the naming/format
+    conventions in http://goo.gl/v1drZl ("CMIP6 Global Attributes, DRS,
+    Filenames, Directory Structure, and CV's"), adapted for a non-CMIP
+    dataset: only the generic, broadly-applicable attributes are included
+    (institution_id, source_id, experiment_id, realm, product, frequency,
+    table_id, variable_id, tracking_id, creation_date). CMIP-ensemble/DRS
+    bookkeeping fields that assume registered CMIP6 controlled vocabularies
+    (mip_era, activity_id, data_specs_version, parent_*, branch_*,
+    realization/initialization/physics/forcing_index, sub_experiment_id,
+    variant_label, grid_label) are omitted, since SurgeMIP isn't a
+    registered CMIP6 activity and setting them (e.g. mip_era="CMIP6") would
+    misrepresent this as literal CMIP6 output.
 
     Parameters
     ----------
@@ -330,6 +367,13 @@ def set_global_attrs(ds, metadata, *, title, summary, feature_type='timeSeries',
         maxima outputs), not part of the shared YAML template.
     summary : str
         Per-file summary/abstract.
+    timestep : str
+        e.g. 'Hourly' or 'MonthlyMax' — the same value passed to
+        build_filename(). Written as the `table_id` attribute and used to
+        derive `frequency`.
+    variable_key : str
+        'WaterLevel' or 'StormSurge' — the same value passed to
+        build_filename(). Written as the `variable_id` attribute.
     feature_type : str
         CF featureType attribute (default 'timeSeries').
     extra : dict or None
@@ -341,11 +385,22 @@ def set_global_attrs(ds, metadata, *, title, summary, feature_type='timeSeries',
     ds.Metadata_Conventions = 'Unidata Dataset Discovery v1.0'
     ds.title = title
     ds.summary = summary
-    ds.date_created = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    ds.creation_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    ds.tracking_id = f'hdl:21.14100/{uuid.uuid4()}'
     ds.history = ''
 
+    computed = {
+        'institution_id': metadata.get('group_name', ''),
+        'source_id': metadata.get('climate_forcing', ''),
+        'experiment_id': metadata.get('scenario', ''),
+        'variable_id': VARIABLES[variable_key]['name'],
+        'table_id': timestep,
+        'frequency': _TIMESTEP_TO_FREQUENCY.get(timestep, ''),
+        'product': 'model-output',
+    }
+
     for key in _ATTR_ORDER:
-        setattr(ds, key, metadata.get(key, DEFAULTS.get(key, '')))
+        setattr(ds, key, computed.get(key, metadata.get(key, DEFAULTS.get(key, ''))))
 
     if extra:
         for key, value in extra.items():

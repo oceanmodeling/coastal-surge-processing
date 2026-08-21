@@ -335,6 +335,7 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
                  f'residual of total water level, computed by subtracting '
                  f'a least-squares tidal harmonic fit from hourly ADCIRC '
                  f'water levels at the official SurgeMIP shoreline points.'),
+        timestep='Hourly', variable_key=OUT_VARIABLE_KEY,
         feature_type='timeSeries',
         extra={
             'source_csv': node['source_csv'],

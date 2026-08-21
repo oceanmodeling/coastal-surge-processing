@@ -355,6 +355,7 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
         summary=(f'Hourly {var_def["long_name"].lower()} extracted from '
                  f'ADCIRC fort.63.nc output at the official SurgeMIP '
                  f'shoreline points.'),
+        timestep='Hourly', variable_key=VARIABLE_KEY,
         feature_type='timeSeries',
         extra={'source_csv': csv_name},
     )

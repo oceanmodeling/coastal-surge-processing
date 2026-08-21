@@ -8,8 +8,12 @@
 #
 # Any field left blank (or omitted entirely) falls back to the built-in
 # default in nc_metadata.py. Fields that describe the data itself rather
-# than its provenance (geospatial extent, time coverage, date_created,
-# title/summary) are computed automatically and are not set here.
+# than its provenance (geospatial extent, time coverage, creation_date,
+# title/summary) are computed automatically and are not set here. This
+# also includes the CMIP6-style institution_id/source_id/experiment_id/
+# variable_id/table_id/frequency/tracking_id attributes (see
+# http://goo.gl/v1drZl) — those are derived from group_name/
+# climate_forcing/scenario below rather than set directly.
 # ---------------------------------------------------------------------------
 
 # Short, unique dataset identifier (no spaces).
@@ -43,12 +47,16 @@ license: ""
 # Organization that produced the data.
 institution: "Argonne National Laboratory"
 
-# Persistent identifier for the institution above, e.g. a ROR URL:
-# "https://ror.org/03qjp1d79".
-institution_id: ""
-
 # Name of the sea/ocean region covered, e.g. "global", "Gulf of Mexico".
 sea_name: "global"
+
+# CMIP6-style "realm" attribute, e.g. "ocean".
+realm: "ocean"
+
+# Optional URL with further documentation about this dataset/run
+# (CMIP6's further_info_url attribute; no fixed template since SurgeMIP
+# isn't a registered CMIP6 activity).
+further_info_url: ""
 
 # Model description, e.g.
 # "ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing".
@@ -80,6 +88,11 @@ comment: ""
 # time range last:
 #
 #   Variable_TimeStep_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
+#
+# These four also become the CMIP6-style institution_id/source_id/
+# experiment_id global attributes (group_name/climate_forcing/scenario;
+# location has no CMIP6 equivalent and is written as-is) — see
+# http://goo.gl/v1drZl.
 #
 # Each must be a single filename-safe token: no underscores or spaces
 # (use CamelCase or a plain code instead, e.g. "CFSv2", "SSP4.5"). Each can
