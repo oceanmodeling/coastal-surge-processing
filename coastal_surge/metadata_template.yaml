@@ -72,3 +72,30 @@ references: ""
 
 # Free-text field for anything else worth noting about this run.
 comment: ""
+
+# ---------------------------------------------------------------------------
+# Naming-convention fields (all four required to build output filenames).
+# Filenames follow a CMIP6-style convention (see
+# https://help.ceda.ac.uk/article/4801-cmip6-data), variable first and
+# time range last:
+#
+#   Variable_TimeStep_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
+#
+# Each must be a single filename-safe token: no underscores or spaces
+# (use CamelCase or a plain code instead, e.g. "CFSv2", "SSP4.5"). Each can
+# also be overridden per-run with --group-name/--climate-forcing/--scenario/
+# --location, which take precedence over the values set here.
+# ---------------------------------------------------------------------------
+
+# Short group/institution code, e.g. "Argonne", "Deltares", "Hereon".
+group_name: ""
+
+# Short code for the atmospheric/tidal forcing dataset driving the model,
+# e.g. "CFSv2", "CCSM4", "HadGEM", "JRA3Q".
+climate_forcing: ""
+
+# Short scenario code, e.g. "Reanalysis", "Historical", "SSP4.5".
+scenario: ""
+
+# Short code for the station/point set, e.g. "GESLA", "coastal35K".
+location: ""

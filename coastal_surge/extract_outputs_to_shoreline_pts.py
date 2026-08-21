@@ -1,41 +1,52 @@
 #!/usr/bin/env python3
 """
-Extract hourly water surface elevations and monthly maxima at the official
-SurgeMIP shoreline points from ADCIRC fort.63.nc files.
+Extract hourly total water level (twl) at the official SurgeMIP shoreline
+points from ADCIRC fort.63.nc files.
 
 Each lon/lat point in the input CSV is matched to the nearest node in the
 full 13.4M-node ADCIRC mesh via an ECEF KDTree.  The extracted time series
-are written to a compact CF-1.8 compliant NetCDF (~55 GB for 46 years at
-float32, versus 550 GB/year for the raw fort.63.nc).  Monthly maxima are
-computed on-the-fly from the in-memory year buffer and written to a
-separate lightweight file.
+are written one compact CF-1.8 compliant NetCDF file per calendar year
+(~1.2 GB/year at float32 for 35k nodes, versus ~550 GB/year for the raw
+fort.63.nc), following the SurgeMIP naming convention:
 
-This script is the primary I/O step for the SurgeMIP water level extraction
-pipeline.  All downstream analysis (tidal harmonic fitting, surge extraction,
-GPD return-level estimation) should operate on the compact output files rather
-than re-reading fort.63.nc.
+    twl_Hourly_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
 
-Algorithm (per year, restart-safe):
+This script is Step 1 of the SurgeMIP water level extraction pipeline:
+
+  Step 1 — this script
+      Reads raw ADCIRC fort.63.nc files (one per year), extracts hourly
+      total water level at the official SurgeMIP shoreline points, and
+      writes one compact per-year CF-1.8 NetCDF file.
+
+  Step 2 — detide_surge.py (optional)
+      Fits tidal harmonics across the per-year hourly twl files from Step 1
+      and writes per-year hourly storm surge height (ssgh) files.
+
+  Step 3 — compute_monthly_max.py
+      Computes full-period monthly maxima (of either twl or ssgh) from a
+      directory of per-year hourly files.
+
+Terminology:
+  twl (total_water_level): astronomical + meteorological driven water level
+    (e.g. storm tide); may include other contributions depending on the
+    model. See the "source"/"forcing"/"comment" global attributes for
+    model-specific details.
+
+Algorithm (per year, restart-safe — a year is skipped if its output file
+already exists, unless --force is given):
   1. Read fort.63.nc in batches of --batch-size full rows (sequential I/O).
-  2. Select the 35k matched nodes from each batch and convert to float32.
+  2. Select the matched nodes from each batch and convert to float32.
   3. Accumulate the full year's data in memory (~1.2 GB at float32).
-  4. Write hourly data to the unlimited-time output file.
-  5. Compute monthly maxima from the in-memory buffer and write to a second
-     file.  No second read of fort.63.nc required.
-
-Output:
-  --output-hourly   CF-1.8 NetCDF, dimensions (node, time), zlib compressed.
-                    Chunked (n_nodes, 1): one chunk = one timestep row, fast
-                    for downstream tidal fitting which reads row by row.
-  --output-monthly  CF-1.8 NetCDF, dimensions (node, time) where time is a
-                    monthly record.  ~78 MB for 46 years.
+  4. Write the whole year to its own output file.
 
 Usage:
   python extract_outputs_to_shoreline_pts.py \\
       --points-csv coastal_points_gsshs_low_20km_35k-pts.csv \\
       --adcirc-dir ${OUTPUT_DIR}/CFS-reanalysis/ \\
-      --output-hourly  shoreline_extremes/cfs_reanalysis_35k_hourly.nc \\
-      --output-monthly shoreline_extremes/cfs_reanalysis_35k_monthly_max.nc
+      --output-dir shoreline_extremes/ \\
+      --metadata-yaml coastal_surge/metadata_template.yaml \\
+      --group-name Argonne --climate-forcing CFSv2 --scenario Reanalysis \\
+      --location GESLA
 
 Dependencies:
   numpy, netCDF4, pandas, scipy
@@ -52,6 +63,8 @@ import numpy as np
 import pandas as pd
 
 import nc_metadata
+
+VARIABLE_KEY = 'WaterLevel'
 
 # CF standard fill value for float32
 CF_FILL_F32 = 9.96921e+36
@@ -80,16 +93,13 @@ def parse_args():
         help='Specific fort.63.nc file(s) to process',
     )
     p.add_argument(
-        '--output-hourly', required=True,
-        help='Output NetCDF path for hourly water levels',
-    )
-    p.add_argument(
-        '--output-monthly', required=True,
-        help='Output NetCDF path for monthly maxima',
+        '--output-dir', required=True,
+        help='Directory to write one hourly twl NetCDF file per year into, '
+             'named per the SurgeMIP convention (see module docstring).',
     )
     p.add_argument(
         '--force', action='store_true',
-        help='Re-extract years already present in output files',
+        help='Re-extract years whose output file already exists',
     )
     p.add_argument(
         '--batch-size', type=int, default=72,
@@ -107,10 +117,11 @@ def parse_args():
     p.add_argument(
         '--metadata-yaml',
         help='Path to a YAML file with global NetCDF metadata (institution, '
-             'contact, project, license, ...). See metadata_template.yaml '
-             'for the editable template. Fields not present fall back to '
-             'built-in defaults.',
+             'contact, project, license, naming fields, ...). See '
+             'metadata_template.yaml for the editable template. Fields not '
+             'present fall back to built-in defaults.',
     )
+    nc_metadata.add_naming_args(p)
     return p.parse_args()
 
 
@@ -257,12 +268,12 @@ def load_official_points(csv_path, adcirc_path, wet_mask_path=None):
 
 
 # ---------------------------------------------------------------------------
-# Output file initialisation
+# Output file writing (one file per year, written in a single shot)
 # ---------------------------------------------------------------------------
 
 def _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
                           point_lon, point_lat, dist_km):
-    """Write static node-dimension variables (shared by both output files)."""
+    """Write static node-dimension variables."""
     n_nodes = len(node_index)
 
     # CRS scalar (CF convention for geographic CRS)
@@ -322,134 +333,63 @@ def _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
     v[:] = dist_km.astype(np.float32)
 
 
-def _set_global_attrs(ds, title, summary, metadata, extra_attrs, csv_name):
-    extra = {'source_csv': csv_name, 'extracted_years': ''}
-    extra.update(extra_attrs)
-    nc_metadata.set_global_attrs(ds, metadata, title=title, summary=summary,
-                                 feature_type='timeSeries', extra=extra)
+def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
+                       node_depth, point_lon, point_lat, dist_km, csv_name,
+                       metadata, times, year_data):
+    """
+    Create and fully write one year's hourly twl NetCDF file in one shot.
 
-
-def init_hourly_output(path, n_nodes, node_index, node_lon, node_lat,
-                        node_depth, point_lon, point_lat, dist_km, csv_name,
-                        metadata):
-    """Create the hourly output NetCDF."""
+    year_data : float32 ndarray (n_nodes, n_times)
+    times : pd.DatetimeIndex (n_times,)
+    """
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    var_def = nc_metadata.VARIABLES[VARIABLE_KEY]
+    n_times = len(times)
+
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
-    _set_global_attrs(
-        ds,
-        title=('STOFS2D-Global hourly water surface elevation at '
-               'SurgeMIP official shoreline'),
-        summary=('Hourly total water surface elevation extracted from '
-                 'ADCIRC fort.63.nc output at the official SurgeMIP '
-                 'shoreline points.'),
-        metadata=metadata,
-        extra_attrs={},
-        csv_name=csv_name,
+    nc_metadata.set_global_attrs(
+        ds, metadata,
+        title=f'Hourly {var_def["long_name"]} at SurgeMIP official shoreline',
+        summary=(f'Hourly {var_def["long_name"].lower()} extracted from '
+                 f'ADCIRC fort.63.nc output at the official SurgeMIP '
+                 f'shoreline points.'),
+        feature_type='timeSeries',
+        extra={'source_csv': csv_name},
     )
     ds.createDimension('node', n_nodes)
-    ds.createDimension('time', None)  # unlimited
+    ds.createDimension('time', n_times)
 
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
     v.units = nc_metadata.TIME_UNITS
     v.calendar = 'standard'
     v.axis = 'T'
+    v[:] = nc_metadata.write_times(ds, 'time', times)
 
-    v = ds.createVariable('zeta', 'f4', ('node', 'time'),
+    v = ds.createVariable(var_def['name'], 'f4', ('node', 'time'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, 1),
+                          chunksizes=(n_nodes, min(n_times, 24)),
                           fill_value=CF_FILL_F32)
-    v.standard_name = 'sea_surface_height_above_geoid'
-    v.long_name = 'Water surface elevation'
+    v.standard_name = var_def['standard_name']
+    v.long_name = var_def['long_name']
     v.units = 'm'
     v.coordinates = 'node_lon node_lat time'
     v.grid_mapping = 'crs'
+
+    chunk = 10000
+    for i in range(0, n_nodes, chunk):
+        j = min(i + chunk, n_nodes)
+        v[i:j, :] = year_data[i:j, :]
 
     _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
                          point_lon, point_lat, dist_km)
     nc_metadata.set_geospatial_extent(ds, node_lon, node_lat, node_depth,
                                       positive='down')
+    nc_metadata.update_time_coverage(ds, times)
     ds.close()
-    print(f'Created hourly output: {out}')
-
-
-def init_monthly_output(path, n_nodes, node_index, node_lon, node_lat,
-                         node_depth, point_lon, point_lat, dist_km, csv_name,
-                         metadata):
-    """Create the monthly maxima output NetCDF."""
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    ds = nc.Dataset(str(out), 'w', format='NETCDF4')
-    _set_global_attrs(
-        ds,
-        title=('STOFS2D-Global monthly maximum water surface elevation at '
-               'SurgeMIP official shoreline'),
-        summary=('Monthly maximum total water surface elevation, computed '
-                 'from hourly ADCIRC fort.63.nc output at the official '
-                 'SurgeMIP shoreline points.'),
-        metadata=metadata,
-        extra_attrs={},
-        csv_name=csv_name,
-    )
-    ds.createDimension('node', n_nodes)
-    ds.createDimension('time', None)  # unlimited, one record per month
-
-    v = ds.createVariable('time', 'f8', ('time',))
-    v.standard_name = 'time'
-    v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
-    v.axis = 'T'
-    v.long_name = 'Start of calendar month'
-
-    v = ds.createVariable('monthly_max', 'f4', ('node', 'time'),
-                          zlib=True, complevel=1,
-                          chunksizes=(n_nodes, 1),
-                          fill_value=CF_FILL_F32)
-    v.standard_name = 'sea_surface_height_above_geoid'
-    v.long_name = 'Monthly maximum water surface elevation'
-    v.units = 'm'
-    v.cell_methods = 'time: maximum within months'
-    v.coordinates = 'node_lon node_lat time'
-    v.grid_mapping = 'crs'
-
-    v = ds.createVariable('year', 'i2', ('time',))
-    v.long_name = 'Calendar year'
-
-    v = ds.createVariable('month', 'i2', ('time',))
-    v.long_name = 'Calendar month (1-12)'
-
-    _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
-                         point_lon, point_lat, dist_km)
-    nc_metadata.set_geospatial_extent(ds, node_lon, node_lat, node_depth,
-                                      positive='down')
-    ds.close()
-    print(f'Created monthly output: {out}')
-
-
-# ---------------------------------------------------------------------------
-# Restart helpers
-# ---------------------------------------------------------------------------
-
-def get_extracted_years(path):
-    if not Path(path).exists():
-        return set()
-    ds = nc.Dataset(str(path), 'r')
-    years_str = getattr(ds, 'extracted_years', '')
-    ds.close()
-    if not years_str:
-        return set()
-    return set(int(y) for y in years_str.split(',') if y.strip())
-
-
-def mark_year_complete(path, year, existing_years):
-    ds = nc.Dataset(str(path), 'a')
-    existing_years.add(year)
-    ds.extracted_years = ','.join(str(y) for y in sorted(existing_years))
-    ds.sync()
-    ds.close()
+    print(f'Wrote {out}')
 
 
 # ---------------------------------------------------------------------------
@@ -523,95 +463,12 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size):
 
 
 # ---------------------------------------------------------------------------
-# Append to output files
-# ---------------------------------------------------------------------------
-
-def append_hourly(path, year_data, times, year, existing_years):
-    """
-    Append one year of hourly data and update extracted_years.
-
-    year_data : float32 [n_nodes, n_times]
-    times : pd.DatetimeIndex
-    """
-    ds = nc.Dataset(str(path), 'a')
-    start = ds.dimensions['time'].size
-    n_new = len(times)
-    n_nodes = year_data.shape[0]
-
-    # Convert to whatever epoch/calendar this file's `time` variable already
-    # declares, so appends stay consistent even if the file was created
-    # under a different reference epoch than the pipeline's current default.
-    time_vals = nc_metadata.write_times(ds, 'time', times)
-
-    print(f'  Appending hourly {year}: {n_nodes:,} nodes × {n_new} steps '
-          f'(offset {start})')
-
-    # Write time axis
-    ds.variables['time'][start:start + n_new] = time_vals
-
-    # Write zeta in node chunks to stay within memory
-    chunk = 10000
-    for i in range(0, n_nodes, chunk):
-        j = min(i + chunk, n_nodes)
-        ds.variables['zeta'][i:j, start:start + n_new] = year_data[i:j, :]
-
-    nc_metadata.update_time_coverage(ds, times)
-    ds.sync()
-    existing_years.add(year)
-    ds.extracted_years = ','.join(str(y) for y in sorted(existing_years))
-    ds.close()
-
-
-def append_monthly(path, year_data, times, year, existing_years):
-    """
-    Compute monthly maxima from year_data and append to monthly output.
-
-    year_data : float32 [n_nodes, n_times], CF fill for dry/invalid
-    times : pd.DatetimeIndex
-    """
-    ds = nc.Dataset(str(path), 'a')
-    start = ds.dimensions['time'].size
-
-    n_nodes = year_data.shape[0]
-
-    months = sorted(times.month.unique())
-    print(f'  Appending monthly {year}: {len(months)} months '
-          f'(offset {start})')
-
-    for mi, m in enumerate(months):
-        mask = times.month == m
-        chunk = year_data[:, mask].copy()  # [n_nodes, n_in_month]
-
-        # Replace CF fill with nan for nanmax, then back to fill
-        chunk = chunk.astype(np.float64)
-        chunk[chunk > 9e35] = np.nan
-        month_max = np.nanmax(chunk, axis=1).astype(np.float32)  # [n_nodes]
-        month_max[np.isnan(month_max)] = CF_FILL_F32
-
-        idx = start + mi
-        ds.variables['monthly_max'][:, idx] = month_max
-        ds.variables['year'][idx] = year
-        ds.variables['month'][idx] = m
-
-        # timestamp = first hour of this month
-        first_t = times[mask][0]
-        ds.variables['time'][idx] = nc_metadata.write_times(ds, 'time', [first_t])[0]
-
-    nc_metadata.update_time_coverage(ds, times)
-    ds.sync()
-    existing_years.add(year)
-    ds.extracted_years = ','.join(str(y) for y in sorted(existing_years))
-    ds.close()
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     args = parse_args()
-    hourly_path = Path(args.output_hourly)
-    monthly_path = Path(args.output_monthly)
+    out_dir = Path(args.output_dir)
     csv_name = Path(args.points_csv).name
 
     if args.batch_size < 1:
@@ -640,8 +497,14 @@ def main():
     # fort.63.nc (e.g. institution/source set by the ADCIRC run) when no
     # --metadata-yaml is given, or to fill gaps left by one.
     source_attrs = nc_metadata.read_known_attrs(file_list[0][1])
-    metadata = nc_metadata.load_metadata(args.metadata_yaml,
-                                         source_attrs=source_attrs)
+    metadata = nc_metadata.load_metadata(
+        args.metadata_yaml, source_attrs=source_attrs,
+        cli_overrides=nc_metadata.naming_overrides_from_args(args))
+
+    # Fail fast if the naming fields aren't resolvable, before any expensive
+    # extraction work.
+    nc_metadata.build_filename(metadata, 'Hourly', VARIABLE_KEY,
+                               file_list[0][0])
 
     # --- Match official points to mesh (uses first fort.63.nc for geometry) ---
     (node_index, node_lon, node_lat, node_depth,
@@ -656,64 +519,27 @@ def main():
     sorted_nodes = node_index[sort_order]
     unsort = np.argsort(sort_order)
 
-    # Node metadata in CSV row order
-    node_lon_csv = node_lon        # already in CSV order (from load_official_points)
-    node_lat_csv = node_lat
-    node_depth_csv = node_depth
-    point_lon_csv = point_lon
-    point_lat_csv = point_lat
-    dist_km_csv = dist_km
-
     # --- Determine which years to extract ---
-    hourly_years = get_extracted_years(hourly_path)
-    monthly_years = get_extracted_years(monthly_path)
+    todo = []
+    for year, adcirc_path in file_list:
+        out_path = out_dir / nc_metadata.build_filename(
+            metadata, 'Hourly', VARIABLE_KEY, year)
+        if out_path.exists() and not args.force:
+            continue
+        todo.append((year, adcirc_path, out_path))
 
-    if args.force:
-        # Strip all years and start fresh
-        if hourly_path.exists():
-            hourly_path.unlink()
-            print(f'Removed (--force): {hourly_path}')
-        if monthly_path.exists():
-            monthly_path.unlink()
-            print(f'Removed (--force): {monthly_path}')
-        hourly_years = set()
-        monthly_years = set()
-    else:
-        done = hourly_years & monthly_years
-        if done:
-            print(f'Skipping already-extracted years '
-                  f'({len(done)}): {", ".join(str(y) for y in sorted(done))}')
-        # Years in hourly but not monthly (partial crash): redo both
-        partial = hourly_years - monthly_years
-        if partial:
-            print(f'Partial years (in hourly but not monthly), will re-extract: '
-                  f'{", ".join(str(y) for y in sorted(partial))}')
-            hourly_years -= partial
-            monthly_years -= partial
-
-    todo = [(y, p) for y, p in file_list
-            if y not in (hourly_years & monthly_years)]
+    skipped = len(file_list) - len(todo)
+    if skipped:
+        print(f'Skipping {skipped} already-extracted year(s) '
+              f'(use --force to redo).')
 
     if not todo:
         print('All years already extracted. Use --force to redo.')
         return
 
-    # --- Initialise output files if needed ---
-    if not hourly_path.exists():
-        init_hourly_output(
-            hourly_path, n_nodes,
-            node_index, node_lon_csv, node_lat_csv, node_depth_csv,
-            point_lon_csv, point_lat_csv, dist_km_csv, csv_name, metadata)
-
-    if not monthly_path.exists():
-        init_monthly_output(
-            monthly_path, n_nodes,
-            node_index, node_lon_csv, node_lat_csv, node_depth_csv,
-            point_lon_csv, point_lat_csv, dist_km_csv, csv_name, metadata)
-
     # --- Extract each year ---
     total_t0 = timer.time()
-    for i, (year, adcirc_path) in enumerate(todo):
+    for i, (year, adcirc_path, out_path) in enumerate(todo):
         print(f'\n{"=" * 60}')
         print(f'Year {year}: {adcirc_path}  [{i + 1}/{len(todo)}]')
         print(f'{"=" * 60}')
@@ -721,8 +547,10 @@ def main():
         times, year_data = extract_year(
             adcirc_path, sorted_nodes, unsort, args.batch_size)
 
-        append_hourly(hourly_path, year_data, times, year, hourly_years)
-        append_monthly(monthly_path, year_data, times, year, monthly_years)
+        write_hourly_year(
+            out_path, n_nodes, node_index, node_lon, node_lat, node_depth,
+            point_lon, point_lat, dist_km, csv_name, metadata, times,
+            year_data)
 
         elapsed = timer.time() - total_t0
         print(f'  Year {year} done. Cumulative: {elapsed:.0f}s')
@@ -730,8 +558,7 @@ def main():
     total_elapsed = timer.time() - total_t0
     print(f'\nAll done. Total: {total_elapsed:.1f}s '
           f'({total_elapsed / 3600:.2f}h)')
-    print(f'  Hourly:  {hourly_path}')
-    print(f'  Monthly: {monthly_path}')
+    print(f'  Output directory: {out_dir}')
 
 
 if __name__ == '__main__':
