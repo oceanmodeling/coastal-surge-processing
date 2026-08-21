@@ -9,7 +9,7 @@ are written one compact CF-1.8 compliant NetCDF file per calendar year
 (~1.2 GB/year at float32 for 35k nodes, versus ~550 GB/year for the raw
 fort.63.nc), following the SurgeMIP naming convention:
 
-    twl_Hourly_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
+    twl_1hr_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
 
 This script is Step 1 of the SurgeMIP water level extraction pipeline:
 
@@ -27,10 +27,10 @@ This script is Step 1 of the SurgeMIP water level extraction pipeline:
       directory of per-year hourly files.
 
 Terminology:
-  twl (total_water_level): astronomical + meteorological driven water level
-    (e.g. storm tide); may include other contributions depending on the
-    model. See the "source"/"forcing"/"comment" global attributes for
-    model-specific details.
+  twl (total_water_level): mean sea level + astronomical tide +
+    meteorologically-driven (storm surge) contributions; may include other
+    contributions depending on the model. See the "source"/"forcing"/
+    "comment" global attributes for model-specific details.
 
 Algorithm (per year, restart-safe — a year is skipped if its output file
 already exists, unless --force is given):

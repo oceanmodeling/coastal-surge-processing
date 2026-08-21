@@ -91,10 +91,19 @@ VARIABLES = {
 }
 
 # Fields required to build the CMIP6-style
-# Variable_TimeStep_GroupName_ClimateForcing_Scenario_Location_TimeRange
+# Variable_Frequency_GroupName_ClimateForcing_Scenario_Location_TimeRange
 # filename convention (see build_filename), in the order they appear
-# between the TimeStep and TimeRange tokens.
+# between the Frequency and TimeRange tokens.
 NAMING_FIELDS = ['group_name', 'climate_forcing', 'scenario', 'location']
+
+# CMIP6 "frequency" CV token (http://goo.gl/v1drZl) for each SurgeMIP
+# timestep. Used both as the filename's Frequency token (build_filename)
+# and to derive the `frequency` global attribute (set_global_attrs);
+# extend this if a new timestep is introduced.
+_TIMESTEP_TO_FREQUENCY = {
+    'Hourly': '1hr',
+    'MonthlyMax': 'mon',
+}
 
 # Order in which global attributes are written, matching the style of the
 # GTSMv3 reanalysis reference file this template is based on, with CMIP6-
@@ -259,15 +268,16 @@ def discover_hourly_year_files(hourly_dir, var_name):
     by build_filename() in hourly_dir, sorted by year.
 
     Matches the current build_filename() convention for a single-year
-    Hourly file: '{var_name}_Hourly_..._{YYYY}01-{YYYY}12.nc' (a Hourly file
+    Hourly file: '{var_name}_1hr_..._{YYYY}01-{YYYY}12.nc' (a Hourly file
     always spans exactly one calendar year, so the two YYYY tokens are
     equal; only the start year is captured/returned).
     """
     hourly_dir = Path(hourly_dir)
+    freq = _TIMESTEP_TO_FREQUENCY['Hourly']
     pattern = re.compile(
-        rf'^{re.escape(var_name)}_Hourly_.*_(\d{{4}})01-\d{{4}}12\.nc$')
+        rf'^{re.escape(var_name)}_{re.escape(freq)}_.*_(\d{{4}})01-\d{{4}}12\.nc$')
     results = []
-    for f in sorted(hourly_dir.glob(f'{var_name}_Hourly_*.nc')):
+    for f in sorted(hourly_dir.glob(f'{var_name}_{freq}_*.nc')):
         m = pattern.search(f.name)
         if m:
             results.append((int(m.group(1)), f))
@@ -282,10 +292,12 @@ def build_filename(metadata, timestep, variable_key, year_or_range):
     variant_label_grid_label_time-range.nc` pattern (see
     https://help.ceda.ac.uk/article/4801-cmip6-data): the variable leads,
     the time range trails, and provenance/descriptor tokens sit in between.
+    The Frequency token is the CMIP6 CV frequency abbreviation (see
+    _TIMESTEP_TO_FREQUENCY), not the raw `timestep` value.
 
-        Variable_TimeStep_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
+        Variable_Frequency_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
 
-    e.g. twl_Hourly_Argonne_CFSv2_Reanalysis_GESLA_200001-200012.nc
+    e.g. twl_1hr_Argonne_CFSv2_Reanalysis_GESLA_200001-200012.nc
 
     Parameters
     ----------
@@ -293,7 +305,8 @@ def build_filename(metadata, timestep, variable_key, year_or_range):
         Result of load_metadata(); must have non-empty group_name,
         climate_forcing, scenario, and location fields.
     timestep : str
-        e.g. 'Hourly' or 'MonthlyMax'.
+        e.g. 'Hourly' or 'MonthlyMax' — looked up in _TIMESTEP_TO_FREQUENCY
+        for the filename's Frequency token (e.g. '1hr' / 'mon').
     variable_key : str
         'WaterLevel' or 'StormSurge' — looked up in VARIABLES for the
         filename's short variable token (twl / ssgh).
@@ -322,21 +335,17 @@ def build_filename(metadata, timestep, variable_key, year_or_range):
         raise ValueError(f'Unknown variable {variable_key!r}, expected one '
                          f'of {list(VARIABLES)}')
 
+    if timestep not in _TIMESTEP_TO_FREQUENCY:
+        raise ValueError(f'Unknown timestep {timestep!r}, expected one of '
+                         f'{list(_TIMESTEP_TO_FREQUENCY)}')
+
     var_name = VARIABLES[variable_key]['name']
+    frequency = _TIMESTEP_TO_FREQUENCY[timestep]
     time_range = _format_time_range(year_or_range)
-    parts = [var_name, timestep]
+    parts = [var_name, frequency]
     parts += [metadata[f] for f in NAMING_FIELDS]
     parts += [time_range]
     return '_'.join(parts) + '.nc'
-
-
-# CMIP6 "frequency" CV token (http://goo.gl/v1drZl) for each SurgeMIP
-# timestep. Used to derive the `frequency` global attribute in
-# set_global_attrs(); extend this if a new timestep is introduced.
-_TIMESTEP_TO_FREQUENCY = {
-    'Hourly': '1hr',
-    'MonthlyMax': 'mon',
-}
 
 
 def set_global_attrs(ds, metadata, *, title, summary, timestep, variable_key,

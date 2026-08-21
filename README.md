@@ -43,13 +43,25 @@ pixi run python coastal_surge/compute_monthly_max.py \
 Output files follow a CMIP6-style naming convention (see
 https://help.ceda.ac.uk/article/4801-cmip6-data), variable first and time
 range last:
-`Variable_TimeStep_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc`,
-e.g. `twl_Hourly_Argonne_CFSv2_Reanalysis_GESLA_200001-200012.nc` or
-`ssgh_MonthlyMax_Argonne_CFSv2_Reanalysis_GESLA_197901-202512.nc`.
+`Variable_Frequency_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc`,
+where `Frequency` is the CMIP6 CV frequency abbreviation (`1hr`, `mon`; see
+http://goo.gl/v1drZl, "CMIP6 Global Attributes, DRS, Filenames, Directory
+Structure, and CV's"), e.g.
+`twl_1hr_Argonne_CFSv2_Reanalysis_GESLA_200001-200012.nc` or
+`ssgh_mon_Argonne_CFSv2_Reanalysis_GESLA_197901-202512.nc`.
+
+Output files also carry CMIP6-style global attributes (`institution_id`,
+`source_id`, `experiment_id`, `variable_id`, `table_id`, `frequency`,
+`product`, `realm`, `tracking_id`, `creation_date`), following the CMIP6
+global-attributes spec (http://goo.gl/v1drZl, "CMIP6 Global Attributes, DRS,
+Filenames, Directory Structure, and CV's"). CMIP-ensemble/DRS bookkeeping
+attributes that assume registered CMIP6 controlled vocabularies (`mip_era`,
+`activity_id`, `parent_*`, `variant_label`, etc.) are intentionally omitted,
+since SurgeMIP isn't a registered CMIP6 activity.
 
 | Variable | Short name | CF-style `standard_name` | Meaning |
 |----------|-----------|---------------------------|---------|
-| WaterLevel | `twl` | `total_water_level` | Astronomical + meteorological driven water level (storm tide); see file metadata for model-specific contributions. |
+| WaterLevel | `twl` | `total_water_level` | Mean sea level + astronomical tide + meteorologically-driven (storm surge) contributions; see file metadata for model-specific contributions. |
 | StormSurge | `ssgh` | `storm_surge_height` | Non-tidal residual of `twl`. Preference is to subtract an astronomical-tide-only model run where available; `detide_surge.py` implements the harmonic-analysis fallback (EXTENDED constituent set minus Sa/Ssa — see [Detiding](#detiding) below). |
 
 ### Detiding
