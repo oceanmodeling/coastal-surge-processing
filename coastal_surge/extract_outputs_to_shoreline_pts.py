@@ -22,7 +22,11 @@ This script is Step 1 of the SurgeMIP water level extraction pipeline:
       Fits tidal harmonics across the per-year hourly twl files from Step 1
       and writes per-year hourly storm surge height (ssgh) files.
 
-  Step 3 — compute_monthly_max.py
+  Step 3 — compute_daily_max.py
+      Computes full-period daily maxima (of either twl or ssgh) from a
+      directory of per-year hourly files.
+
+  Step 4 — compute_monthly_max.py
       Computes full-period monthly maxima (of either twl or ssgh) from a
       directory of per-year hourly files.
 

@@ -102,6 +102,7 @@ NAMING_FIELDS = ['group_name', 'climate_forcing', 'scenario', 'location']
 # extend this if a new timestep is introduced.
 _TIMESTEP_TO_FREQUENCY = {
     'Hourly': '1hr',
+    'DailyMax': 'day',
     'MonthlyMax': 'mon',
 }
 

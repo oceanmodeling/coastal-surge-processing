@@ -1,44 +1,29 @@
 #!/usr/bin/env python3
 """
-Compute full-period monthly maxima from a directory of per-year hourly
+Compute full-period daily maxima from a directory of per-year hourly
 NetCDF files (either twl or ssgh), writing a single output file that spans
 the whole record.
 
-This script is Step 4 of the SurgeMIP water level extraction pipeline, and
+This script is Step 3 of the SurgeMIP water level extraction pipeline, and
 can be run on the output of either Step 1 (twl) or Step 2 (ssgh):
 
   Step 1 — extract_outputs_to_shoreline_pts.py   -> hourly twl, per year
   Step 2 — detide_surge.py (optional)            -> hourly ssgh, per year
-  Step 3 — compute_daily_max.py (optional)       -> full-period DailyMax
-  Step 4 — this script                           -> full-period MonthlyMax
+  Step 3 — this script                           -> full-period DailyMax
+  Step 4 — compute_monthly_max.py                -> full-period MonthlyMax
 
-24-hour separation rule (per Natacha/Melissa):
-  For each node, the timestamps of two chronologically adjacent months'
-  maxima must be separated by at least 24 hours. In the rare case where
-  they are not:
-    - the larger of the two maxima is kept unchanged, and
-    - for the month with the *smaller* maximum, that specific timestep is
-      excluded and the month's maximum is recomputed from the remaining
-      data.
-  The recomputed value is then re-checked against its other neighbor (the
-  check cascades, bounded to a few iterations — true multi-hop cascades are
-  expected to be exceedingly rare). Every node/month whose maximum was
-  altered by this rule is flagged 1 in the `<var>_adjusted` output variable,
-  and the count is recorded in the `n_adjusted_node_months` global attribute,
-  supporting a sensitivity discussion of this choice.
-
-This is a single streaming pass (not checkpointed): each year's hourly file
-is read once, in chronological order, keeping only the current and previous
-month's raw hourly data in memory (enough to resolve the adjacency rule
-across month and year boundaries) plus the finalized max/time/adjusted
-arrays for every month completed so far. If interrupted, rerun from
-scratch — this pass is far cheaper than the Step 2 tidal fit.
+Unlike compute_monthly_max.py, no cross-day adjustment is applied: this is a
+plain calendar-day maximum of the hourly series, with no minimum-separation
+rule between adjacent days' maxima. Because a calendar day always falls
+entirely within a single year's hourly file, each year can be processed
+independently in one streaming pass with no state carried across year
+boundaries.
 
 Usage:
-  python compute_monthly_max.py \\
+  python compute_daily_max.py \\
       --hourly-dir /path/to/twl_hourly/ \\
       --variable   WaterLevel \\
-      --output-dir /path/to/monthly_max/
+      --output-dir /path/to/daily_max/
 
 Dependencies:
   numpy, netCDF4, pandas
@@ -54,9 +39,6 @@ import numpy as np
 import pandas as pd
 
 import nc_metadata
-
-MIN_SEPARATION_HOURS = 24.0
-MAX_CASCADE_ITER = 5
 
 # CF fill value written by extract_outputs_to_shoreline_pts.py / detide_surge.py
 CF_FILL_F32 = 9.96921e+36
@@ -74,7 +56,7 @@ def parse_args():
     p.add_argument(
         '--hourly-dir', required=True,
         help='Directory of per-year hourly NetCDF files (twl or ssgh) to '
-             'compute monthly maxima from',
+             'compute daily maxima from',
     )
     p.add_argument(
         '--variable', required=True, choices=sorted(nc_metadata.VARIABLES),
@@ -82,7 +64,7 @@ def parse_args():
     )
     p.add_argument(
         '--output-dir', required=True,
-        help='Directory to write the single full-period MonthlyMax NetCDF into',
+        help='Directory to write the single full-period DailyMax NetCDF into',
     )
     p.add_argument(
         '--force', action='store_true',
@@ -124,89 +106,31 @@ def read_node_metadata(path):
 
 
 # ---------------------------------------------------------------------------
-# Per-month state
+# Per-day maxima
 # ---------------------------------------------------------------------------
 
-def compute_month_info(year, month, month_data, month_time_hours):
+def compute_day_max(date, day_data, day_time_hours):
     """
-    month_data : (n_nodes, n_hours) float64, CF_FILL_F32 for invalid/dry
-    month_time_hours : (n_hours,) float64, hours since nc_metadata.EPOCH
+    date : datetime.date
+    day_data : (n_nodes, n_hours) float64, CF_FILL_F32 for invalid/dry
+    day_time_hours : (n_hours,) float64, hours since nc_metadata.EPOCH
 
-    Returns a dict tracking enough state to both report this month's max
-    and, if needed, exclude a timestep and recompute it later.
+    Returns a finalized dict for this calendar day (no cross-day state).
     """
-    n_nodes = month_data.shape[0]
-    valid = month_data < (CF_FILL_F32 / 2)
-    data = np.where(valid, month_data, -np.inf)
+    n_nodes = day_data.shape[0]
+    valid = day_data < (CF_FILL_F32 / 2)
+    data = np.where(valid, day_data, -np.inf)
 
     argmax_idx = np.argmax(data, axis=1)
     any_valid = valid.any(axis=1)
     max_val = data[np.arange(n_nodes), argmax_idx]
     max_val = np.where(any_valid, max_val, np.nan)
-    max_time_hours = np.where(any_valid, month_time_hours[argmax_idx], np.nan)
+    max_time_hours = np.where(any_valid, day_time_hours[argmax_idx], np.nan)
 
     return {
-        'year': year, 'month': month,
-        'data': data,                    # (n_nodes, n_hours), mutated on recompute
-        'time_hours': month_time_hours,  # (n_hours,)
-        'argmax_idx': argmax_idx,        # (n_nodes,)
-        'max_val': max_val,              # (n_nodes,)
+        'date': date,
+        'max_val': max_val.astype(np.float32),
         'max_time_hours': max_time_hours,
-        'adjusted': np.zeros(n_nodes, dtype=bool),
-    }
-
-
-def _recompute_excluding_argmax(info, node_mask):
-    """Exclude the current per-node argmax timestep and recompute the max
-    from the remaining hours, for nodes where node_mask is True."""
-    rows = np.where(node_mask)[0]
-    info['data'][rows, info['argmax_idx'][rows]] = -np.inf
-
-    new_argmax = np.argmax(info['data'][rows], axis=1)
-    new_val = info['data'][rows, new_argmax]
-    any_valid = np.isfinite(new_val)
-
-    info['argmax_idx'][rows] = new_argmax
-    info['max_val'][rows] = np.where(any_valid, new_val, np.nan)
-    info['max_time_hours'][rows] = np.where(
-        any_valid, info['time_hours'][new_argmax], np.nan)
-    info['adjusted'][rows] = True
-
-
-def resolve_adjacency(prev, cur):
-    """
-    Enforce the >=24h separation rule between two chronologically adjacent
-    months' maxima, mutating `prev`/`cur` in place. Returns the count of
-    node-months adjusted by this call (0, 1, or 2 per cascade iteration).
-    """
-    n_adjusted = 0
-    for _ in range(MAX_CASCADE_ITER):
-        both_valid = ~np.isnan(prev['max_val']) & ~np.isnan(cur['max_val'])
-        delta_hours = np.abs(cur['max_time_hours'] - prev['max_time_hours'])
-        violation = both_valid & (delta_hours < MIN_SEPARATION_HOURS)
-        if not violation.any():
-            break
-
-        prev_smaller = violation & (prev['max_val'] <= cur['max_val'])
-        cur_smaller = violation & ~prev_smaller
-
-        if prev_smaller.any():
-            _recompute_excluding_argmax(prev, prev_smaller)
-            n_adjusted += int(prev_smaller.sum())
-        if cur_smaller.any():
-            _recompute_excluding_argmax(cur, cur_smaller)
-            n_adjusted += int(cur_smaller.sum())
-
-    return n_adjusted
-
-
-def finalize(info):
-    """Drop the heavy raw-data arrays, keeping only the reportable fields."""
-    return {
-        'year': info['year'], 'month': info['month'],
-        'max_val': info['max_val'].astype(np.float32),
-        'max_time_hours': info['max_time_hours'],
-        'adjusted': info['adjusted'],
     }
 
 
@@ -214,10 +138,10 @@ def finalize(info):
 # Output
 # ---------------------------------------------------------------------------
 
-def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
+def write_daily_max(path, node, metadata, variable_key, days):
     var_def = nc_metadata.VARIABLES[variable_key]
     n_nodes = len(node['node_index'])
-    n_time = len(months)
+    n_time = len(days)
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -225,24 +149,17 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
     nc_metadata.set_global_attrs(
         ds, metadata,
-        title=f'Full-period monthly maximum {var_def["long_name"]} '
+        title=f'Full-period daily maximum {var_def["long_name"]} '
               f'at SurgeMIP official shoreline',
-        summary=(f'Monthly maximum {var_def["long_name"].lower()}, computed '
+        summary=(f'Daily maximum {var_def["long_name"].lower()}, computed '
                  f'from hourly values at the official SurgeMIP shoreline '
                  f'points, over the full simulation period.'),
-        timestep='MonthlyMax', variable_key=variable_key,
+        timestep='DailyMax', variable_key=variable_key,
         feature_type='timeSeries',
         extra={
             'source_csv': node['source_csv'],
-            'monthly_max_method': (
-                'Calendar-month maximum of the hourly series. Adjacent '
-                f'months\' maxima are required to be separated by at least '
-                f'{MIN_SEPARATION_HOURS:.0f}h; where violated, the smaller '
-                f'of the two maxima is recomputed excluding that timestep. '
-                f'See the "{var_def["name"]}_adjusted" variable for which '
-                f'node/months were affected.'),
-            'monthly_max_min_separation_hours': MIN_SEPARATION_HOURS,
-            'n_adjusted_node_months': int(n_adjusted),
+            'daily_max_method': 'Calendar-day maximum of the hourly series, '
+                                 'with no cross-day adjustment.',
         },
     )
     ds.createDimension('node', n_nodes)
@@ -253,55 +170,48 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v.units = nc_metadata.TIME_UNITS
     v.calendar = 'standard'
     v.axis = 'T'
-    v.long_name = 'Start of calendar month'
-    v[:] = [nc.date2num(pd.Timestamp(year=m['year'], month=m['month'], day=1)
-                        .to_pydatetime(), nc_metadata.TIME_UNITS, 'standard')
-            for m in months]
+    v.long_name = 'Start of calendar day'
+    v[:] = [nc.date2num(pd.Timestamp(d['date']).to_pydatetime(),
+                        nc_metadata.TIME_UNITS, 'standard')
+            for d in days]
 
     v = ds.createVariable('year', 'i2', ('time',))
     v.long_name = 'Calendar year'
-    v[:] = [m['year'] for m in months]
+    v[:] = [d['date'].year for d in days]
 
     v = ds.createVariable('month', 'i2', ('time',))
     v.long_name = 'Calendar month (1-12)'
-    v[:] = [m['month'] for m in months]
+    v[:] = [d['date'].month for d in days]
 
-    max_arr = np.stack([m['max_val'] for m in months], axis=1)  # (node, time)
+    v = ds.createVariable('day', 'i2', ('time',))
+    v.long_name = 'Calendar day of month (1-31)'
+    v[:] = [d['date'].day for d in days]
+
+    max_arr = np.stack([d['max_val'] for d in days], axis=1)  # (node, time)
     max_arr = np.where(np.isnan(max_arr), CF_FILL_F32, max_arr).astype(np.float32)
 
     v = ds.createVariable(var_def['name'], 'f4', ('node', 'time'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 120)),
+                          chunksizes=(n_nodes, min(n_time, 366)),
                           fill_value=CF_FILL_F32)
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
     v.units = 'm'
-    v.cell_methods = 'time: maximum within months'
+    v.cell_methods = 'time: maximum within days'
     v.coordinates = 'node_lon node_lat time'
     v.grid_mapping = 'crs'
     v[:] = max_arr
 
-    time_arr = np.stack([m['max_time_hours'] for m in months], axis=1)
+    time_arr = np.stack([d['max_time_hours'] for d in days], axis=1)
     time_arr = np.where(np.isnan(time_arr), CF_FILL_F32, time_arr)
     v = ds.createVariable(f'{var_def["name"]}_time', 'f8', ('node', 'time'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 120)),
+                          chunksizes=(n_nodes, min(n_time, 366)),
                           fill_value=CF_FILL_F32)
     v.units = nc_metadata.TIME_UNITS
     v.calendar = 'standard'
-    v.long_name = f'Time of the retained monthly maximum {var_def["name"]}'
+    v.long_name = f'Time of the retained daily maximum {var_def["name"]}'
     v[:] = time_arr
-
-    adj_arr = np.stack([m['adjusted'] for m in months], axis=1).astype('i1')
-    v = ds.createVariable(f'{var_def["name"]}_adjusted', 'i1', ('node', 'time'),
-                          zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 120)))
-    v.long_name = (f'1 if this node/month\'s maximum was recomputed due to '
-                   f'a <{MIN_SEPARATION_HOURS:.0f}h separation conflict '
-                   f'with a neighboring month, else 0')
-    v.flag_values = np.array([0, 1], dtype='i1')
-    v.flag_meanings = 'unadjusted adjusted'
-    v[:] = adj_arr
 
     crs_v = ds.createVariable('crs', 'i4')
     crs_v.grid_mapping_name = 'latitude_longitude'
@@ -351,12 +261,10 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
 
     nc_metadata.set_geospatial_extent(ds, node['node_lon'], node['node_lat'],
                                       node['node_depth'], positive='down')
-    valid_times = [pd.Timestamp(year=m['year'], month=m['month'], day=1)
-                   for m in months]
+    valid_times = [pd.Timestamp(d['date']) for d in days]
     nc_metadata.update_time_coverage(ds, valid_times)
     ds.close()
-    print(f'Wrote {out}  ({n_time} months, {n_adjusted} node-months adjusted '
-          f'for the {MIN_SEPARATION_HOURS:.0f}h separation rule)')
+    print(f'Wrote {out}  ({n_time} days)')
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +296,7 @@ def main():
 
     year_range = f'{year_files[0][0]}-{year_files[-1][0]}'
     out_path = output_dir / nc_metadata.build_filename(
-        metadata, 'MonthlyMax', args.variable, year_range)
+        metadata, 'DailyMax', args.variable, year_range)
 
     if out_path.exists() and not args.force:
         print(f'{out_path} already exists. Use --force to overwrite.')
@@ -396,36 +304,26 @@ def main():
 
     node = read_node_metadata(year_files[0][1])
 
-    finalized = []
-    total_adjusted = 0
-    prev = None
+    days = []
     t0 = timer.time()
 
     for year, path in year_files:
         print(f'\nReading {path} ...')
         times, data = read_hourly_year(path, var_name)
         time_hours_all = (times - nc_metadata.EPOCH).total_seconds().values / 3600.0
+        dates = times.date
 
-        for month in sorted(times.month.unique()):
-            mask = times.month == month
-            cur = compute_month_info(year, month, data[:, mask],
-                                     time_hours_all[mask])
-            if prev is not None:
-                total_adjusted += resolve_adjacency(prev, cur)
-                finalized.append(finalize(prev))
-            prev = cur
+        for date in sorted(np.unique(dates)):
+            mask = dates == date
+            days.append(compute_day_max(date, data[:, mask],
+                                        time_hours_all[mask]))
 
-        print(f'  {len(finalized)} month(s) finalized so far '
+        print(f'  {len(days)} day(s) finalized so far '
               f'[{timer.time() - t0:.0f}s]')
 
-    if prev is not None:
-        finalized.append(finalize(prev))
+    print(f'\n{len(days)} total day(s).')
 
-    print(f'\n{len(finalized)} total month(s), {total_adjusted} node-month(s) '
-          f'adjusted for the {MIN_SEPARATION_HOURS:.0f}h separation rule.')
-
-    write_monthly_max(out_path, node, metadata, args.variable, finalized,
-                      total_adjusted)
+    write_daily_max(out_path, node, metadata, args.variable, days)
 
 
 if __name__ == '__main__':

@@ -16,7 +16,10 @@ pipeline:
       only needed when a StormSurge product is wanted — skip it if only
       total water level is required.
 
-  Step 3 — compute_monthly_max.py
+  Step 3 — compute_daily_max.py
+      Computes full-period daily maxima of either twl or ssgh.
+
+  Step 4 — compute_monthly_max.py
       Computes full-period monthly maxima of either twl or ssgh.
 
 Terminology:

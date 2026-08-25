@@ -33,7 +33,13 @@ pixi run python coastal_surge/detide_surge.py \
     --hourly-dir /path/to/twl_hourly/ \
     --output-dir /path/to/ssgh_hourly/
 
-# Step 3: full-period monthly maxima, for either twl or ssgh
+# Step 3 (optional): full-period daily maxima, for either twl or ssgh
+pixi run python coastal_surge/compute_daily_max.py \
+    --hourly-dir /path/to/ssgh_hourly/ \
+    --variable   StormSurge \
+    --output-dir /path/to/daily_max/
+
+# Step 4: full-period monthly maxima, for either twl or ssgh
 pixi run python coastal_surge/compute_monthly_max.py \
     --hourly-dir /path/to/ssgh_hourly/ \
     --variable   StormSurge \
@@ -44,9 +50,9 @@ Output files follow a CMIP6-style naming convention (see
 https://help.ceda.ac.uk/article/4801-cmip6-data), variable first and time
 range last:
 `Variable_Frequency_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc`,
-where `Frequency` is the CMIP6 CV frequency abbreviation (`1hr`, `mon`; see
-http://goo.gl/v1drZl, "CMIP6 Global Attributes, DRS, Filenames, Directory
-Structure, and CV's"), e.g.
+where `Frequency` is the CMIP6 CV frequency abbreviation (`1hr`, `day`,
+`mon`; see http://goo.gl/v1drZl, "CMIP6 Global Attributes, DRS, Filenames,
+Directory Structure, and CV's"), e.g.
 `twl_1hr_Argonne_CFSv2_Reanalysis_GESLA_200001-200012.nc` or
 `ssgh_mon_Argonne_CFSv2_Reanalysis_GESLA_197901-202512.nc`.
 
