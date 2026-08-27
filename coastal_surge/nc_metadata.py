@@ -200,12 +200,29 @@ _ATTR_ORDER = [
 _COPYABLE_KEYS = [k for k in DEFAULTS if k not in (
     'id', 'datum', 'geospatial_bounds_crs', 'geospatial_bounds_vertical_crs')]
 
+# group_name/climate_forcing/scenario are never written to a file under
+# their own names — set_global_attrs() only writes their CMIP6-style
+# renamed equivalents (institution_id/source_id/experiment_id), per
+# _ATTR_ORDER, specifically to avoid duplicating the same value under two
+# attribute names (see its comment). So when reading a naming field back
+# from an upstream file for inheritance (extract_known_attrs below), fall
+# back to the CMIP6 name if the plain one isn't present.
+_NAMING_FIELD_ALIASES = {
+    'group_name': 'institution_id',
+    'climate_forcing': 'source_id',
+    'scenario': 'experiment_id',
+}
+
 
 def extract_known_attrs(ds):
     """
     Pull whatever global attributes on an already-open netCDF4.Dataset match
     our known metadata fields (e.g. an upstream ADCIRC fort.63.nc, or a
     compact file written by an earlier pipeline step).
+
+    group_name/climate_forcing/scenario are recovered via their CMIP6-style
+    attribute names (institution_id/source_id/experiment_id) since those
+    are what's actually written to the file (see _NAMING_FIELD_ALIASES).
 
     Parameters
     ----------
@@ -217,8 +234,9 @@ def extract_known_attrs(ds):
     """
     found = {}
     for key in _COPYABLE_KEYS:
-        if key in ds.ncattrs():
-            value = getattr(ds, key)
+        attr_name = _NAMING_FIELD_ALIASES.get(key, key)
+        if attr_name in ds.ncattrs():
+            value = getattr(ds, attr_name)
             if value not in (None, ''):
                 found[key] = value
     return found
