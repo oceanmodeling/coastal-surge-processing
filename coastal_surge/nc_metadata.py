@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import netCDF4 as nc
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -43,9 +44,31 @@ DEFAULTS = {
     'researcher_id': '',
     'researcher_email': '',
     'researcher_affiliation': '',
-    'source': 'ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing',
+    'source': 'ADCIRC unstructured-mesh storm surge model (STOFS2D-Global '
+              'setup) forced by CFS reanalysis atmospheric fields',
     'forcing': '',
-    'crs': 'WGS84',
+    # Horizontal CRS of the source model/station coordinates (ACDD
+    # `geospatial_bounds_crs`, e.g. an EPSG code), written on the
+    # geospatial_bounds bounding box by set_geospatial_extent(). WGS84
+    # lat/lon is assumed throughout this pipeline (see the fixed WGS84
+    # ellipsoid parameters on the `crs` variable in write_node_block()), so
+    # this should only be overridden if that ever changes.
+    'geospatial_bounds_crs': 'EPSG:4326',
+    # Vertical datum/CRS of `node_depth` (ACDD
+    # `geospatial_bounds_vertical_crs`, e.g. an EPSG code or geoid/datum
+    # name), written alongside geospatial_bounds_crs. No single value is
+    # valid across all runs — ADCIRC depth is geoid-referenced, but the
+    # specific geoid model varies by mesh/campaign — so this is left blank
+    # unless set via --metadata-yaml. See set_geospatial_extent().
+    'geospatial_bounds_vertical_crs': '',
+    # Vertical datum of the water level variable's own values (e.g. "LMSL"
+    # or "NAVD88") — distinct from node_depth's vertical datum above.
+    # Written as that variable's `datum` attribute (see resolve_datum()).
+    # Left blank here since the right default depends on which variable is
+    # being written: 'LMSL' for twl, blank for ssgh (a detided residual
+    # with no fixed absolute vertical reference) — see
+    # VARIABLES['default_vertical_datum'].
+    'datum': '',
     'license': '',
     'acknowledgment': '',
     'references': '',
@@ -76,19 +99,37 @@ DEFAULTS = {
 # convention. 'name' is both the netCDF variable name and the filename
 # token; 'standard_name' is written as the variable's standard_name
 # attribute even though these two terms are not (yet) part of the official
-# CF Standard Name Table.
+# CF Standard Name Table. 'default_vertical_datum' is this variable's
+# default `datum` attribute (see resolve_datum()): twl is referenced to
+# local mean sea level by default, while ssgh (a detided residual) has no
+# fixed absolute vertical reference.
 VARIABLES = {
     'WaterLevel': {
         'name': 'twl',
         'standard_name': 'total_water_level',
         'long_name': 'Total Water Level',
+        'default_vertical_datum': 'LMSL',
     },
     'StormSurge': {
         'name': 'ssgh',
         'standard_name': 'storm_surge_height',
         'long_name': 'Storm Surge Height',
+        'default_vertical_datum': '',
     },
 }
+
+
+def resolve_datum(metadata, variable_key):
+    """
+    Resolve the vertical datum for a variable's own values (e.g. 'LMSL' for
+    twl), written as that variable's `datum` attribute by the pipeline's
+    write functions. An explicit metadata['datum'] (set via
+    --metadata-yaml) always wins; otherwise falls back to this variable's
+    default (see VARIABLES). Returns '' if neither applies (e.g. ssgh by
+    default), in which case callers should omit the attribute.
+    """
+    return metadata.get('datum') or VARIABLES[variable_key].get(
+        'default_vertical_datum', '')
 
 # Fields required to build the CMIP6-style
 # Variable_Frequency_GroupName_ClimateForcing_Scenario_Location_TimeRange
@@ -120,7 +161,7 @@ _ATTR_ORDER = [
     'researcher_name', 'researcher_id', 'researcher_email',
     'researcher_affiliation',
     'license', 'institution', 'institution_id', 'further_info_url',
-    'sea_name', 'source', 'source_id', 'forcing', 'experiment_id', 'crs',
+    'sea_name', 'source', 'source_id', 'forcing', 'experiment_id',
     'realm', 'product', 'frequency', 'table_id', 'variable_id', 'location',
     'keywords', 'standard_name_vocabulary', 'references', 'comment',
 ]
@@ -128,8 +169,13 @@ _ATTR_ORDER = [
 # Fields eligible for auto-copy from an input file's global attributes.
 # 'id' is excluded: it's meant to uniquely identify each output product, so
 # it should come from the YAML/DEFAULTS rather than be inherited unchanged
-# from an upstream file.
-_COPYABLE_KEYS = [k for k in DEFAULTS if k != 'id']
+# from an upstream file. 'datum' and 'geospatial_bounds_crs'/
+# 'geospatial_bounds_vertical_crs' are also excluded: they're not written
+# via the generic _ATTR_ORDER loop (see resolve_datum()/
+# set_geospatial_extent()), but they're still useful as config defaults —
+# read via metadata.get(...) directly rather than through this list.
+_COPYABLE_KEYS = [k for k in DEFAULTS if k not in (
+    'id', 'datum', 'geospatial_bounds_crs', 'geospatial_bounds_vertical_crs')]
 
 
 def extract_known_attrs(ds):
@@ -209,6 +255,14 @@ def load_metadata(yaml_path=None, source_attrs=None, cli_overrides=None):
         for key, value in cli_overrides.items():
             if value is not None and value != '':
                 metadata[key] = value
+
+    # 'forcing' (free-text) and 'climate_forcing' (the short naming-
+    # convention token used to build filenames and the CMIP6-style
+    # source_id attribute) usually name the same thing. If the user never
+    # set 'forcing' explicitly (YAML/source file/CLI), default it to
+    # whatever climate_forcing resolved to, rather than leaving it blank.
+    if not metadata.get('forcing') and metadata.get('climate_forcing'):
+        metadata['forcing'] = metadata['climate_forcing']
 
     return metadata
 
@@ -417,7 +471,8 @@ def set_global_attrs(ds, metadata, *, title, summary, timestep, variable_key,
             setattr(ds, key, value)
 
 
-def set_geospatial_extent(ds, lon, lat, depth=None, positive='down'):
+def set_geospatial_extent(ds, lon, lat, depth=None, positive='down',
+                          crs='EPSG:4326', vertical_crs=''):
     """
     Set geospatial_* global attributes describing the station coordinates.
 
@@ -431,21 +486,56 @@ def set_geospatial_extent(ds, lon, lat, depth=None, positive='down'):
     positive : str
         'down' if depth increases downward (ADCIRC convention), 'up' for
         elevation. Mirrors the variable-level `positive` attribute.
+    crs : str
+        ACDD `geospatial_bounds_crs` value describing the horizontal CRS of
+        `lon`/`lat` (and of the source model's own coordinates, since this
+        pipeline doesn't reproject). Default 'EPSG:4326' (WGS84), matching
+        the fixed WGS84 ellipsoid parameters on the `crs` variable written
+        by write_node_block() — override via metadata['geospatial_bounds_crs']
+        only if that ever changes.
+    vertical_crs : str
+        ACDD `geospatial_bounds_vertical_crs` value describing the vertical
+        reference for `depth` (e.g. an EPSG code or geoid/datum name for the
+        specific model run's vertical datum). There's no single value valid
+        across all runs (ADCIRC depth is geoid-referenced, but the geoid
+        model varies), so this is left to the caller/metadata YAML; the
+        attribute is only written when non-empty.
+
+    Notes
+    -----
+    `geospatial_bounds_crs`/`geospatial_bounds_vertical_crs` are, per ACDD
+    1.3, specifically the CRS of the `geospatial_bounds` WKT geometry (not
+    of the plain `geospatial_lat/lon/vertical_min/max` attributes above) —
+    so a minimal bounding-box `geospatial_bounds` polygon is written here to
+    ground them per spec, rather than setting the CRS attributes alone.
+    This is also where the source model's own horizontal/vertical CRS is
+    recorded — there's no separate "source_crs" attribute elsewhere.
     """
-    ds.geospatial_lat_min = float(min(lat))
-    ds.geospatial_lat_max = float(max(lat))
+    lat_min, lat_max = float(min(lat)), float(max(lat))
+    lon_min, lon_max = float(min(lon)), float(max(lon))
+
+    ds.geospatial_lat_min = lat_min
+    ds.geospatial_lat_max = lat_max
     ds.geospatial_lat_units = 'degrees_north'
     ds.geospatial_lat_resolution = 'point'
-    ds.geospatial_lon_min = float(min(lon))
-    ds.geospatial_lon_max = float(max(lon))
+    ds.geospatial_lon_min = lon_min
+    ds.geospatial_lon_max = lon_max
     ds.geospatial_lon_units = 'degrees_east'
     ds.geospatial_lon_resolution = 'point'
+    ds.geospatial_bounds = (
+        f'POLYGON(({lon_min} {lat_min}, {lon_max} {lat_min}, '
+        f'{lon_max} {lat_max}, {lon_min} {lat_max}, '
+        f'{lon_min} {lat_min}))'
+    )
+    ds.geospatial_bounds_crs = crs
 
     if depth is not None:
         ds.geospatial_vertical_min = float(min(depth))
         ds.geospatial_vertical_max = float(max(depth))
         ds.geospatial_vertical_units = 'm'
         ds.geospatial_vertical_positive = positive
+        if vertical_crs:
+            ds.geospatial_bounds_vertical_crs = vertical_crs
 
 
 def read_times(ds, varname='time'):
@@ -524,3 +614,198 @@ def update_time_coverage(ds, times):
         ds.time_coverage_start = start_str
     if not existing_end or end_str > existing_end:
         ds.time_coverage_end = end_str
+
+
+# ---------------------------------------------------------------------------
+# Model-dependent node indexing
+# ---------------------------------------------------------------------------
+
+# Registry of on-disk node-indexing conventions, keyed by the value stored
+# in a file's `model_name` global attribute. 'dims' is 1 for a flat
+# unstructured-mesh index (a single 'node_index' variable) or 2 for a
+# structured/curvilinear grid (separate 'node_i'/'node_j' variables).
+# 'base' is the on-disk numbering origin (0 or 1) used by that model's
+# native node/cell numbering; internally, this pipeline always tracks
+# indices 0-based and converts to/from `base` only in write_node_index()/
+# read_node_index(). Only 'ADCIRC' is actually produced today (by
+# extract_outputs_to_shoreline_pts.py, an unstructured mesh with 1-based
+# fort.63.nc node numbering) — add an entry here for any other source
+# model, e.g. a 0-based unstructured model or a 2-D structured grid:
+#   'SCHISM': {'dims': 1, 'base': 0},
+#   'STRUCTURED': {'dims': 2, 'base': 0},
+NODE_INDEX_SCHEMES = {
+    'ADCIRC': {'dims': 1, 'base': 1},
+}
+DEFAULT_MODEL_NAME = 'ADCIRC'
+
+
+def get_node_index_scheme(model_name):
+    """Look up the on-disk node-indexing convention for `model_name`."""
+    if model_name not in NODE_INDEX_SCHEMES:
+        raise ValueError(
+            f'Unknown model_name {model_name!r}; add an entry to '
+            f'NODE_INDEX_SCHEMES in nc_metadata.py, expected one of '
+            f'{list(NODE_INDEX_SCHEMES)}')
+    return NODE_INDEX_SCHEMES[model_name]
+
+
+def model_node_long_name(model_name, what):
+    """e.g. model_node_long_name('ADCIRC', 'Longitude') -> 'Longitude of
+    matched ADCIRC mesh node'."""
+    return f'{what} of matched {model_name} mesh node'
+
+
+def write_node_index(ds, model_name, node_index, dim='node'):
+    """
+    Write the node-identifying index variable(s) using the on-disk
+    convention registered for `model_name` (see NODE_INDEX_SCHEMES),
+    converting from the pipeline's internal 0-based index to that model's
+    native base, and records `model_name` as a global attribute so
+    read_node_index() can reverse the conversion later.
+
+    Parameters
+    ----------
+    ds : netCDF4.Dataset
+        Dataset opened in write mode, with dimension `dim` already created.
+    model_name : str
+        Key into NODE_INDEX_SCHEMES.
+    node_index : array-like
+        0-based index into the source model's node/cell array. Shape (n,)
+        for a 1-D ('dims': 1) scheme, or (n, 2) of (i, j) pairs for a 2-D
+        ('dims': 2) scheme.
+    dim : str
+        Name of the existing netCDF dimension these variables are defined
+        over (default 'node').
+    """
+    scheme = get_node_index_scheme(model_name)
+    base = scheme['base']
+    ds.model_name = model_name
+
+    if scheme['dims'] == 1:
+        node_index = np.asarray(node_index)
+        v = ds.createVariable('node_index', 'i4', (dim,), zlib=True, complevel=1)
+        v.long_name = (f'{base}-based index, matches original {model_name} '
+                       f'model node numbering')
+        v.cf_role = 'timeseries_id'
+        v[:] = node_index + base
+    else:
+        node_index = np.asarray(node_index)
+        if node_index.ndim != 2 or node_index.shape[1] != 2:
+            raise ValueError(
+                f'{model_name} uses 2-D (i, j) indexing; node_index must '
+                f'have shape (n, 2), got {node_index.shape}')
+        v = ds.createVariable('node_i', 'i4', (dim,), zlib=True, complevel=1)
+        v.long_name = (f'{base}-based i-index, matches original {model_name} '
+                       f'model node numbering')
+        v.cf_role = 'timeseries_id'
+        v[:] = node_index[:, 0] + base
+
+        v = ds.createVariable('node_j', 'i4', (dim,), zlib=True, complevel=1)
+        v.long_name = (f'{base}-based j-index, matches original {model_name} '
+                       f'model node numbering')
+        v[:] = node_index[:, 1] + base
+
+
+def read_node_index(ds, dim='node'):
+    """
+    Read whichever node-index variable(s) an input file has, converting
+    back to the pipeline's internal 0-based convention using the on-disk
+    base registered for its `model_name` global attribute (defaulting to
+    'ADCIRC' for files written before model_name was tracked).
+
+    Returns
+    -------
+    model_name : str
+    node_index : ndarray
+        0-based; shape (n,) for a 1-D scheme or (n, 2) of (i, j) pairs for
+        a 2-D scheme.
+    """
+    model_name = getattr(ds, 'model_name', DEFAULT_MODEL_NAME)
+    scheme = get_node_index_scheme(model_name)
+    base = scheme['base']
+    if scheme['dims'] == 1:
+        node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - base
+    else:
+        i_idx = np.array(ds.variables['node_i'][:], dtype=np.int64) - base
+        j_idx = np.array(ds.variables['node_j'][:], dtype=np.int64) - base
+        node_index = np.stack([i_idx, j_idx], axis=1)
+    return model_name, node_index
+
+
+def write_node_block(ds, model_name, node, dim='node'):
+    """
+    Write the full set of static per-node variables shared by every
+    SurgeMIP pipeline output: crs, node_index (see write_node_index),
+    node_lon/lat/depth, point_lon/lat, dist_km.
+
+    Parameters
+    ----------
+    ds : netCDF4.Dataset
+        Dataset opened in write mode, with dimension `dim` already created.
+    model_name : str
+        Key into NODE_INDEX_SCHEMES.
+    node : dict
+        'node_index' (see write_node_index for shape/convention),
+        'node_lon', 'node_lat', 'node_depth', 'point_lon', 'point_lat',
+        'dist_km' : ndarray (n,)
+    dim : str
+    """
+    crs_v = ds.createVariable('crs', 'i4')
+    crs_v.grid_mapping_name = 'latitude_longitude'
+    crs_v.longitude_of_prime_meridian = 0.0
+    crs_v.semi_major_axis = 6378137.0
+    crs_v.inverse_flattening = 298.257223563
+    crs_v[:] = -2147483647
+
+    write_node_index(ds, model_name, node['node_index'], dim=dim)
+
+    for name, key, std_name, long_name, units in [
+        ('node_lon', 'node_lon', 'longitude',
+         model_node_long_name(model_name, 'Longitude'), 'degrees_east'),
+        ('node_lat', 'node_lat', 'latitude',
+         model_node_long_name(model_name, 'Latitude'), 'degrees_north'),
+        ('node_depth', 'node_depth', 'sea_floor_depth_below_geoid',
+         'Depth of matched mesh node below geoid', 'm'),
+        ('point_lon', 'point_lon', 'longitude',
+         'Original CSV point longitude (GSHHS)', 'degrees_east'),
+        ('point_lat', 'point_lat', 'latitude',
+         'Original CSV point latitude (GSHHS)', 'degrees_north'),
+    ]:
+        v = ds.createVariable(name, 'f8', (dim,), zlib=True, complevel=1)
+        v.standard_name = std_name
+        v.long_name = long_name
+        v.units = units
+        v[:] = node[key]
+        if name == 'node_depth':
+            v.positive = 'down'
+
+    v = ds.createVariable('dist_km', 'f4', (dim,), zlib=True, complevel=1)
+    v.long_name = 'Distance from CSV point to matched mesh node'
+    v.units = 'km'
+    v[:] = node['dist_km'].astype(np.float32)
+
+
+def read_node_block(ds, dim='node'):
+    """
+    Read the full set of static per-node variables written by
+    write_node_block().
+
+    Returns
+    -------
+    dict with 'model_name', 'node_index' (0-based; see read_node_index),
+    'node_lon', 'node_lat', 'node_depth', 'point_lon', 'point_lat',
+    'dist_km', and 'source_csv' (from the `source_csv` global attribute, if
+    present).
+    """
+    model_name, node_index = read_node_index(ds, dim=dim)
+    return dict(
+        model_name=model_name,
+        node_index=node_index,
+        node_lon=np.array(ds.variables['node_lon'][:], dtype=np.float64),
+        node_lat=np.array(ds.variables['node_lat'][:], dtype=np.float64),
+        node_depth=np.array(ds.variables['node_depth'][:], dtype=np.float64),
+        point_lon=np.array(ds.variables['point_lon'][:], dtype=np.float64),
+        point_lat=np.array(ds.variables['point_lat'][:], dtype=np.float64),
+        dist_km=np.array(ds.variables['dist_km'][:], dtype=np.float64),
+        source_csv=getattr(ds, 'source_csv', ''),
+    )

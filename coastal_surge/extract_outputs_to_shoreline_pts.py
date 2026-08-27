@@ -119,6 +119,14 @@ def parse_args():
              'floodplain nodes.',
     )
     p.add_argument(
+        '--model-name', default=nc_metadata.DEFAULT_MODEL_NAME,
+        choices=sorted(nc_metadata.NODE_INDEX_SCHEMES),
+        help='Source model, determining the on-disk node-indexing '
+             'convention recorded in the output (see NODE_INDEX_SCHEMES in '
+             'nc_metadata.py). Default: ADCIRC (this script only reads '
+             'ADCIRC fort.63.nc, so this is the only supported value today).',
+    )
+    p.add_argument(
         '--metadata-yaml',
         help='Path to a YAML file with global NetCDF metadata (institution, '
              'contact, project, license, naming fields, ...). See '
@@ -275,71 +283,9 @@ def load_official_points(csv_path, adcirc_path, wet_mask_path=None):
 # Output file writing (one file per year, written in a single shot)
 # ---------------------------------------------------------------------------
 
-def _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
-                          point_lon, point_lat, dist_km):
-    """Write static node-dimension variables."""
-    n_nodes = len(node_index)
-
-    # CRS scalar (CF convention for geographic CRS)
-    crs_v = ds.createVariable('crs', 'i4')
-    crs_v.grid_mapping_name = 'latitude_longitude'
-    crs_v.longitude_of_prime_meridian = 0.0
-    crs_v.semi_major_axis = 6378137.0
-    crs_v.inverse_flattening = 298.257223563
-    crs_v[:] = -2147483647  # conventional dummy value
-
-    v = ds.createVariable('node_index', 'i4', ('node',),
-                          zlib=True, complevel=1)
-    v.long_name = 'ADCIRC mesh node index (1-based, matches fort.63.nc node numbering)'
-    v.cf_role = 'timeseries_id'
-    v[:] = node_index + 1
-
-    v = ds.createVariable('node_lon', 'f8', ('node',),
-                          zlib=True, complevel=1)
-    v.standard_name = 'longitude'
-    v.long_name = 'Longitude of matched ADCIRC mesh node'
-    v.units = 'degrees_east'
-    v[:] = node_lon
-
-    v = ds.createVariable('node_lat', 'f8', ('node',),
-                          zlib=True, complevel=1)
-    v.standard_name = 'latitude'
-    v.long_name = 'Latitude of matched ADCIRC mesh node'
-    v.units = 'degrees_north'
-    v[:] = node_lat
-
-    v = ds.createVariable('node_depth', 'f8', ('node',),
-                          zlib=True, complevel=1)
-    v.standard_name = 'sea_floor_depth_below_geoid'
-    v.long_name = 'Depth of matched mesh node below geoid'
-    v.units = 'm'
-    v.positive = 'down'
-    v[:] = node_depth
-
-    v = ds.createVariable('point_lon', 'f8', ('node',),
-                          zlib=True, complevel=1)
-    v.standard_name = 'longitude'
-    v.long_name = 'Original CSV point longitude (GSHHS)'
-    v.units = 'degrees_east'
-    v[:] = point_lon
-
-    v = ds.createVariable('point_lat', 'f8', ('node',),
-                          zlib=True, complevel=1)
-    v.standard_name = 'latitude'
-    v.long_name = 'Original CSV point latitude (GSHHS)'
-    v.units = 'degrees_north'
-    v[:] = point_lat
-
-    v = ds.createVariable('dist_km', 'f4', ('node',),
-                          zlib=True, complevel=1)
-    v.long_name = 'Distance from CSV point to matched mesh node'
-    v.units = 'km'
-    v[:] = dist_km.astype(np.float32)
-
-
 def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
                        node_depth, point_lon, point_lat, dist_km, csv_name,
-                       metadata, times, year_data):
+                       metadata, times, year_data, model_name):
     """
     Create and fully write one year's hourly twl NetCDF file in one shot.
 
@@ -380,6 +326,9 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
     v.units = 'm'
+    datum = nc_metadata.resolve_datum(metadata, VARIABLE_KEY)
+    if datum:
+        v.datum = datum
     v.coordinates = 'node_lon node_lat time'
     v.grid_mapping = 'crs'
 
@@ -388,10 +337,14 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
         j = min(i + chunk, n_nodes)
         v[i:j, :] = year_data[i:j, :]
 
-    _write_node_metadata(ds, node_index, node_lon, node_lat, node_depth,
-                         point_lon, point_lat, dist_km)
-    nc_metadata.set_geospatial_extent(ds, node_lon, node_lat, node_depth,
-                                      positive='down')
+    node = dict(node_index=node_index, node_lon=node_lon, node_lat=node_lat,
+                node_depth=node_depth, point_lon=point_lon,
+                point_lat=point_lat, dist_km=dist_km)
+    nc_metadata.write_node_block(ds, model_name, node)
+    nc_metadata.set_geospatial_extent(
+        ds, node_lon, node_lat, node_depth, positive='down',
+        crs=metadata.get('geospatial_bounds_crs', 'EPSG:4326'),
+        vertical_crs=metadata.get('geospatial_bounds_vertical_crs', ''))
     nc_metadata.update_time_coverage(ds, times)
     ds.close()
     print(f'Wrote {out}')
@@ -555,7 +508,7 @@ def main():
         write_hourly_year(
             out_path, n_nodes, node_index, node_lon, node_lat, node_depth,
             point_lon, point_lat, dist_km, csv_name, metadata, times,
-            year_data)
+            year_data, args.model_name)
 
         elapsed = timer.time() - total_t0
         print(f'  Year {year} done. Cumulative: {elapsed:.0f}s')

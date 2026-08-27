@@ -109,18 +109,9 @@ def read_hourly_year(path, var_name):
 
 def read_node_metadata(path):
     ds = nc.Dataset(str(path), 'r')
-    node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - 1
-    node_lon   = np.array(ds.variables['node_lon'][:], dtype=np.float64)
-    node_lat   = np.array(ds.variables['node_lat'][:], dtype=np.float64)
-    node_depth = np.array(ds.variables['node_depth'][:], dtype=np.float64)
-    point_lon  = np.array(ds.variables['point_lon'][:], dtype=np.float64)
-    point_lat  = np.array(ds.variables['point_lat'][:], dtype=np.float64)
-    dist_km    = np.array(ds.variables['dist_km'][:], dtype=np.float64)
-    source_csv = getattr(ds, 'source_csv', '')
+    node = nc_metadata.read_node_block(ds)
     ds.close()
-    return dict(node_index=node_index, node_lon=node_lon, node_lat=node_lat,
-                node_depth=node_depth, point_lon=point_lon,
-                point_lat=point_lat, dist_km=dist_km, source_csv=source_csv)
+    return node
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +267,9 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
     v.units = 'm'
+    datum = nc_metadata.resolve_datum(metadata, variable_key)
+    if datum:
+        v.datum = datum
     v.cell_methods = 'time: maximum within months'
     v.coordinates = 'node_lon node_lat time'
     v.grid_mapping = 'crs'
@@ -303,54 +297,13 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v.flag_meanings = 'unadjusted adjusted'
     v[:] = adj_arr
 
-    crs_v = ds.createVariable('crs', 'i4')
-    crs_v.grid_mapping_name = 'latitude_longitude'
-    crs_v.longitude_of_prime_meridian = 0.0
-    crs_v.semi_major_axis = 6378137.0
-    crs_v.inverse_flattening = 298.257223563
-    crs_v[:] = -2147483647
+    nc_metadata.write_node_block(ds, node['model_name'], node)
 
-    v = ds.createVariable('node_index', 'i4', ('node',), zlib=True, complevel=1)
-    v.long_name = 'ADCIRC mesh node index (1-based, matches fort.63.nc node numbering)'
-    v.cf_role = 'timeseries_id'
-    v[:] = node['node_index'] + 1
-
-    v = ds.createVariable('node_lon', 'f8', ('node',), zlib=True, complevel=1)
-    v.standard_name = 'longitude'
-    v.units = 'degrees_east'
-    v[:] = node['node_lon']
-
-    v = ds.createVariable('node_lat', 'f8', ('node',), zlib=True, complevel=1)
-    v.standard_name = 'latitude'
-    v.units = 'degrees_north'
-    v[:] = node['node_lat']
-
-    v = ds.createVariable('node_depth', 'f8', ('node',), zlib=True, complevel=1)
-    v.standard_name = 'sea_floor_depth_below_geoid'
-    v.long_name = 'Depth of matched mesh node below geoid'
-    v.units = 'm'
-    v.positive = 'down'
-    v[:] = node['node_depth']
-
-    v = ds.createVariable('point_lon', 'f8', ('node',), zlib=True, complevel=1)
-    v.standard_name = 'longitude'
-    v.long_name = 'Original CSV point longitude (GSHHS)'
-    v.units = 'degrees_east'
-    v[:] = node['point_lon']
-
-    v = ds.createVariable('point_lat', 'f8', ('node',), zlib=True, complevel=1)
-    v.standard_name = 'latitude'
-    v.long_name = 'Original CSV point latitude (GSHHS)'
-    v.units = 'degrees_north'
-    v[:] = node['point_lat']
-
-    v = ds.createVariable('dist_km', 'f4', ('node',), zlib=True, complevel=1)
-    v.long_name = 'Distance from CSV point to matched mesh node'
-    v.units = 'km'
-    v[:] = node['dist_km'].astype(np.float32)
-
-    nc_metadata.set_geospatial_extent(ds, node['node_lon'], node['node_lat'],
-                                      node['node_depth'], positive='down')
+    nc_metadata.set_geospatial_extent(
+        ds, node['node_lon'], node['node_lat'], node['node_depth'],
+        positive='down',
+        crs=metadata.get('geospatial_bounds_crs', 'EPSG:4326'),
+        vertical_crs=metadata.get('geospatial_bounds_vertical_crs', ''))
     valid_times = [pd.Timestamp(year=m['year'], month=m['month'], day=1)
                    for m in months]
     nc_metadata.update_time_coverage(ds, valid_times)

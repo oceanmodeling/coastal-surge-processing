@@ -58,16 +58,45 @@ realm: "ocean"
 # isn't a registered CMIP6 activity).
 further_info_url: ""
 
-# Model description, e.g.
-# "ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing".
+# Full descriptive name of the model system that produced this data,
+# ideally spelled out rather than abbreviated, e.g. "ADCIRC unstructured-
+# mesh storm surge model (STOFS2D-Global setup) forced by CFS reanalysis
+# atmospheric fields".
 source: ""
 
 # Atmospheric/tidal forcing dataset(s) driving the model, e.g.
-# "REMO MPI-ESM rcp26 and FES2004".
+# "REMO MPI-ESM rcp26 and FES2004". If left blank, this defaults to
+# whatever "climate_forcing" resolves to below (e.g. "CFSv2"), since they
+# usually name the same thing; set this explicitly only if you want a
+# fuller/different description than that short filename token.
 forcing: ""
 
-# Horizontal coordinate reference system of the station coordinates.
-crs: "WGS84"
+# Vertical datum of the water level variable's own values, e.g. "LMSL"
+# (local mean sea level) or "NAVD88" — written as that variable's `datum`
+# attribute. Distinct from node_depth's vertical datum
+# (geospatial_bounds_vertical_crs below). If left blank, this defaults per
+# variable: "LMSL" for twl, blank for ssgh (a detided residual with no
+# fixed absolute vertical reference) — see VARIABLES in nc_metadata.py. Set
+# this explicitly only to override that default.
+datum: ""
+
+# --- Horizontal/vertical CRS of the source model's own coordinates,
+# written on the geospatial_bounds bounding box (ACDD geospatial_bounds_crs
+# / geospatial_bounds_vertical_crs) — there's no separate "source CRS"
+# attribute elsewhere. ---
+
+# Horizontal CRS of the station coordinates, e.g. an EPSG code. WGS84
+# lat/lon is assumed throughout this pipeline (see the fixed WGS84
+# ellipsoid parameters on the `crs` variable in nc_metadata.py), so this
+# should only be overridden if that ever changes.
+geospatial_bounds_crs: "EPSG:4326"
+
+# Vertical datum/CRS of `node_depth`, e.g. an EPSG code or geoid/datum
+# name. ADCIRC depth is geoid-referenced, but the specific geoid model
+# (and therefore the correct value here) varies by mesh/campaign, so
+# there's no single default — leave blank to omit the attribute, or set
+# e.g. "EPSG:3855" (EGM2008 height).
+geospatial_bounds_vertical_crs: ""
 
 # Semicolon-separated search keywords.
 keywords: "storm surge; coastal flooding; water level; ADCIRC; SurgeMIP"

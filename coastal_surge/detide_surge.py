@@ -266,59 +266,9 @@ def read_hourly_year(path, var_name):
 
 def read_node_metadata(path):
     ds = nc.Dataset(str(path), 'r')
-    node_index = np.array(ds.variables['node_index'][:], dtype=np.int64) - 1
-    node_lon   = np.array(ds.variables['node_lon'][:], dtype=np.float64)
-    node_lat   = np.array(ds.variables['node_lat'][:], dtype=np.float64)
-    node_depth = np.array(ds.variables['node_depth'][:], dtype=np.float64)
-    point_lon  = np.array(ds.variables['point_lon'][:], dtype=np.float64)
-    point_lat  = np.array(ds.variables['point_lat'][:], dtype=np.float64)
-    dist_km    = np.array(ds.variables['dist_km'][:], dtype=np.float64)
-    source_csv = getattr(ds, 'source_csv', '')
+    node = nc_metadata.read_node_block(ds)
     ds.close()
-    return dict(node_index=node_index, node_lon=node_lon, node_lat=node_lat,
-                node_depth=node_depth, point_lon=point_lon,
-                point_lat=point_lat, dist_km=dist_km, source_csv=source_csv)
-
-
-def _write_node_metadata(ds, node):
-    n_nodes = len(node['node_index'])
-
-    crs_v = ds.createVariable('crs', 'i4')
-    crs_v.grid_mapping_name = 'latitude_longitude'
-    crs_v.longitude_of_prime_meridian = 0.0
-    crs_v.semi_major_axis = 6378137.0
-    crs_v.inverse_flattening = 298.257223563
-    crs_v[:] = -2147483647
-
-    v = ds.createVariable('node_index', 'i4', ('node',), zlib=True, complevel=1)
-    v.long_name = 'ADCIRC mesh node index (1-based, matches fort.63.nc node numbering)'
-    v.cf_role = 'timeseries_id'
-    v[:] = node['node_index'] + 1
-
-    for name, key, std_name, long_name, units in [
-        ('node_lon', 'node_lon', 'longitude',
-         'Longitude of matched ADCIRC mesh node', 'degrees_east'),
-        ('node_lat', 'node_lat', 'latitude',
-         'Latitude of matched ADCIRC mesh node', 'degrees_north'),
-        ('node_depth', 'node_depth', 'sea_floor_depth_below_geoid',
-         'Depth of matched mesh node below geoid', 'm'),
-        ('point_lon', 'point_lon', 'longitude',
-         'Original CSV point longitude (GSHHS)', 'degrees_east'),
-        ('point_lat', 'point_lat', 'latitude',
-         'Original CSV point latitude (GSHHS)', 'degrees_north'),
-    ]:
-        v = ds.createVariable(name, 'f8', ('node',), zlib=True, complevel=1)
-        v.standard_name = std_name
-        v.long_name = long_name
-        v.units = units
-        v[:] = node[key]
-        if name == 'node_depth':
-            v.positive = 'down'
-
-    v = ds.createVariable('dist_km', 'f4', ('node',), zlib=True, complevel=1)
-    v.long_name = 'Distance from CSV point to matched mesh node'
-    v.units = 'km'
-    v[:] = node['dist_km'].astype(np.float32)
+    return node
 
 
 def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
@@ -367,6 +317,9 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
     v.units = 'm'
+    datum = nc_metadata.resolve_datum(metadata, OUT_VARIABLE_KEY)
+    if datum:
+        v.datum = datum
     v.coordinates = 'node_lon node_lat time'
     v.grid_mapping = 'crs'
 
@@ -375,9 +328,12 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
         j = min(i + chunk, n_nodes)
         v[i:j, :] = surge_data[i:j, :]
 
-    _write_node_metadata(ds, node)
-    nc_metadata.set_geospatial_extent(ds, node['node_lon'], node['node_lat'],
-                                      node['node_depth'], positive='down')
+    nc_metadata.write_node_block(ds, node['model_name'], node)
+    nc_metadata.set_geospatial_extent(
+        ds, node['node_lon'], node['node_lat'], node['node_depth'],
+        positive='down',
+        crs=metadata.get('geospatial_bounds_crs', 'EPSG:4326'),
+        vertical_crs=metadata.get('geospatial_bounds_vertical_crs', ''))
     nc_metadata.update_time_coverage(ds, times)
     ds.close()
     print(f'Wrote {out}')
