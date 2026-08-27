@@ -306,14 +306,20 @@ def naming_overrides_from_args(args):
 
 def _format_time_range(year_or_range):
     """
-    Format a year or year range as a CMIP6-style YYYYMM-YYYYMM time range.
+    Format a year, year range, or month-precision range as a CMIP6-style
+    YYYYMM-YYYYMM time range.
 
-    All SurgeMIP outputs span full calendar years, so the month is always
-    01 for the start and 12 for the end (e.g. 2000 -> '200001-200012',
-    '1947-2025' -> '194701-202512').
+    Most SurgeMIP outputs span full calendar years, so a bare year or
+    year-year range gets month 01 appended to the start and 12 to the end
+    (e.g. 2000 -> '200001-200012', '1947-2025' -> '194701-202512'). A
+    caller that already has month precision (e.g. a --start-date/
+    --end-date-clipped partial-year file) can instead pass an already-built
+    YYYYMM-YYYYMM string directly, which is passed through unchanged.
     """
     start, _, end = str(year_or_range).partition('-')
     end = end or start
+    if len(start) == 6 and len(end) == 6:
+        return f'{start}-{end}'
     return f'{start}01-{end}12'
 
 
