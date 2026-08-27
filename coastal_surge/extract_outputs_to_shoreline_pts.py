@@ -112,8 +112,20 @@ def parse_args():
              'Memory per batch: batch_size × 13.4M × 8 bytes.',
     )
     p.add_argument(
+        '--start-date',
+        help='Clip output to timesteps >= this date (ISO format, e.g. '
+             '"2011-04-01"). Useful for splitting a fort.63.nc that spans '
+             'two forcing datasets (e.g. CFSR/CFSv2 mid-2011).',
+    )
+    p.add_argument(
+        '--end-date',
+        help='Clip output to timesteps <= this date (ISO format, e.g. '
+             '"2011-03-31T23:00"). Inclusive.',
+    )
+    p.add_argument(
         '--wet-mask',
-        help='Path to always_wet_mask.npz produced by build_always_wet_mask.py. '
+        help='Path to always_wet_mask.npz or always_wet_mask.nc (with an '
+             'ever_dried variable) produced by build_always_wet_mask.py. '
              'When supplied, the KDTree is restricted to always-wet nodes only, '
              'preventing CSV points from being matched to intermittently-dry '
              'floodplain nodes.',
@@ -223,8 +235,9 @@ def load_official_points(csv_path, adcirc_path, wet_mask_path=None):
 
     print(f'Loading official points from {csv_path} ...')
     df = pd.read_csv(str(csv_path))
-    point_lon = df['Longitude'].values.astype(np.float64)
-    point_lat = df['Latitude'].values.astype(np.float64)
+    df.columns = [c.strip().lower() for c in df.columns]
+    point_lon = df['longitude'].values.astype(np.float64)
+    point_lat = df['latitude'].values.astype(np.float64)
     print(f'  {len(point_lon):,} points')
 
     print(f'Loading full mesh from {adcirc_path} ...')
@@ -239,8 +252,15 @@ def load_official_points(csv_path, adcirc_path, wet_mask_path=None):
     # Optionally restrict the search to always-wet nodes
     if wet_mask_path is not None:
         print(f'Loading always-wet mask from {wet_mask_path} ...')
-        data = np.load(str(wet_mask_path))
-        always_wet = data['always_wet']
+        wet_mask_path = str(wet_mask_path)
+        if wet_mask_path.endswith('.nc'):
+            _ds = nc.Dataset(wet_mask_path, 'r')
+            ever_dried = np.array(_ds.variables['ever_dried'][:], dtype=bool)
+            _ds.close()
+            always_wet = ~ever_dried
+        else:
+            data = np.load(wet_mask_path)
+            always_wet = data['always_wet']
         if len(always_wet) != len(mesh_lon):
             print(f'ERROR: wet mask has {len(always_wet)} entries but mesh has '
                   f'{len(mesh_lon)} nodes — mask was built from a different mesh.')
@@ -364,9 +384,10 @@ def read_time_axis(adcirc_path):
     return times
 
 
-def extract_year(adcirc_path, sorted_nodes, unsort, batch_size):
+def extract_year(adcirc_path, sorted_nodes, unsort, batch_size,
+                 start_date=None, end_date=None):
     """
-    Read one year's fort.63.nc and return the full time series at sorted_nodes.
+    Read one fort.63.nc and return the time series at sorted_nodes.
 
     Parameters
     ----------
@@ -374,6 +395,10 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size):
     sorted_nodes : ndarray int, sorted node indices for efficient slab selection
     unsort : ndarray int, argsort(sort_order) to restore CSV row order
     batch_size : int
+    start_date : pd.Timestamp or None
+        If given, clip to timesteps >= start_date (inclusive).
+    end_date : pd.Timestamp or None
+        If given, clip to timesteps <= end_date (inclusive).
 
     Returns
     -------
@@ -386,6 +411,15 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size):
                                ds.variables['time'].units, cal)
     times = pd.to_datetime([d.isoformat() for d in cftime_dates])
 
+    # Apply date clipping
+    mask = np.ones(len(times), dtype=bool)
+    if start_date is not None:
+        mask &= times >= start_date
+    if end_date is not None:
+        mask &= times <= end_date
+    indices = np.where(mask)[0]
+    times = times[indices]
+
     n_times = len(times)
     n_nodes = len(sorted_nodes)
     zeta_var = ds.variables['zeta']
@@ -395,10 +429,15 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size):
     t0_wall = timer.time()
     print(f'  {n_times:,} timesteps, batch_size={batch_size}')
 
-    for t_s in range(0, n_times, batch_size):
+    # Read in contiguous runs of the (possibly non-contiguous) index array.
+    # For full-year files with no clipping, this is a single run.
+    t_s = 0
+    while t_s < n_times:
         t_e = min(t_s + batch_size, n_times)
+        src_s = int(indices[t_s])
+        src_e = int(indices[t_e - 1]) + 1
 
-        slab = zeta_var[t_s:t_e, :]                           # [B, 13.4M] float64
+        slab = zeta_var[src_s:src_e, :]                           # [B, 13.4M] float64
         vals = np.array(slab[:, sorted_nodes], dtype=np.float32)  # [B, n_nodes]
         del slab
 
@@ -410,6 +449,8 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size):
             elapsed = timer.time() - t0_wall
             print(f'    [{t_e / n_times * 100:.0f}%] {t_e}/{n_times} '
                   f'[{elapsed:.0f}s]', flush=True)
+
+        t_s = t_e
 
     ds.close()
     elapsed = timer.time() - t0_wall
@@ -451,6 +492,10 @@ def main():
             file_list.append((get_adcirc_year(p), p))
         file_list.sort(key=lambda x: x[0])
 
+    # Parse optional date clip args
+    start_date = pd.Timestamp(args.start_date) if args.start_date else None
+    end_date   = pd.Timestamp(args.end_date)   if args.end_date   else None
+
     # Inherit any matching global attrs already present on the source
     # fort.63.nc (e.g. institution/source set by the ADCIRC run) when no
     # --metadata-yaml is given, or to fill gaps left by one.
@@ -477,22 +522,30 @@ def main():
     sorted_nodes = node_index[sort_order]
     unsort = np.argsort(sort_order)
 
-    # --- Determine which years to extract ---
+    # --- Determine which files to extract ---
+    # Output filename is derived from actual extracted timestamps (not the
+    # year integer) so partial files (clipped with --start/end-date, or
+    # campaigns that start mid-year like CFS 1979) get correct YYYYMM ranges.
     todo = []
     for year, adcirc_path in file_list:
+        times = read_time_axis(adcirc_path)
+        if start_date is not None:
+            times = times[times >= start_date]
+        if end_date is not None:
+            times = times[times <= end_date]
+        if len(times) == 0:
+            print(f'  Skipping {year}: no timesteps within date range')
+            continue
+        time_range = f'{times[0].strftime("%Y%m")}-{times[-1].strftime("%Y%m")}'
         out_path = out_dir / nc_metadata.build_filename(
-            metadata, 'Hourly', VARIABLE_KEY, year)
+            metadata, 'Hourly', VARIABLE_KEY, time_range)
         if out_path.exists() and not args.force:
+            print(f'  Skipping {year} (output exists): {out_path.name}')
             continue
         todo.append((year, adcirc_path, out_path))
 
-    skipped = len(file_list) - len(todo)
-    if skipped:
-        print(f'Skipping {skipped} already-extracted year(s) '
-              f'(use --force to redo).')
-
     if not todo:
-        print('All years already extracted. Use --force to redo.')
+        print('All files already extracted. Use --force to redo.')
         return
 
     # --- Extract each year ---
@@ -503,7 +556,8 @@ def main():
         print(f'{"=" * 60}')
 
         times, year_data = extract_year(
-            adcirc_path, sorted_nodes, unsort, args.batch_size)
+            adcirc_path, sorted_nodes, unsort, args.batch_size,
+            start_date=start_date, end_date=end_date)
 
         write_hourly_year(
             out_path, n_nodes, node_index, node_lon, node_lat, node_depth,
