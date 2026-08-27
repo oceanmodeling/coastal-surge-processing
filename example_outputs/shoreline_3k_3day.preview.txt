@@ -1,0 +1,128 @@
+=== twl_1hr_Argonne_CFSR_Reanalysis_coastal3K_197904-197904.nc ===
+
+Global attributes:
+  Conventions = CF-1.8
+  featureType = timeSeries
+  Metadata_Conventions = Unidata Dataset Discovery v1.0
+  title = Hourly Total Water Level at the official SurgeMIP coastal3K points
+  summary = Hourly total water level extracted from ADCIRC fort.63.nc output at the official SurgeMIP coastal3K points.
+  creation_date = 2026-08-27T20:23:49Z
+  tracking_id = hdl:21.14100/966169d3-9968-408b-8b17-6e441a39adac
+  history = 
+  id = SurgeMIP_shoreline_waterlevels
+  project = SurgeMIP
+  acknowledgment = This work was supported by the U.S. Department of Energy, Office of Science.
+  contact = William J. Pringle, wpringle@anl.gov
+  creator_name = Coleman Blakely
+  creator_id = 
+  creator_email = cblakely@anl.gov
+  researcher_name = Coleman Blakely
+  researcher_id = 
+  researcher_email = cblakely@anl.gov
+  researcher_affiliation = Argonne National Laboratory
+  license = CC-BY-4.0
+  institution = Argonne National Laboratory
+  institution_id = Argonne
+  further_info_url = https://cblakely97.github.io/surgemip-dashboard/
+  sea_name = global
+  source = ADCIRC STOFS2D-Global
+  source_id = CFSR
+  forcing = CFSR
+  experiment_id = Reanalysis
+  realm = ocean
+  product = model-output
+  frequency = 1hr
+  table_id = Hourly
+  variable_id = twl
+  location = coastal3K
+  keywords = storm surge; coastal flooding; water level; ADCIRC; SurgeMIP
+  standard_name_vocabulary = CF Standard Name Table
+  references = https://github.com/CHLNDDEV/OceanMesh2D/
+  comment = 
+  source_csv = coastal_points_gsshs_low_200km_3k-pts.csv
+  model_name = ADCIRC
+  geospatial_lat_min = -68.7590432162
+  geospatial_lat_max = 83.6266710401
+  geospatial_lat_units = degrees_north
+  geospatial_lat_resolution = point
+  geospatial_lon_min = -179.35018566880004
+  geospatial_lon_max = 179.9926898286
+  geospatial_lon_units = degrees_east
+  geospatial_lon_resolution = point
+  geospatial_bounds = POLYGON((-179.35018566880004 -68.7590432162, 179.9926898286 -68.7590432162, 179.9926898286 83.6266710401, -179.35018566880004 83.6266710401, -179.35018566880004 -68.7590432162))
+  geospatial_bounds_crs = EPSG:4326
+  geospatial_vertical_min = 0.3
+  geospatial_vertical_max = 1360.890625
+  geospatial_vertical_units = m
+  geospatial_vertical_positive = down
+  time_coverage_start = 1979-04-01 01:00:00
+  time_coverage_end = 1979-04-03 23:00:00
+
+Dimensions:
+  node = 3291
+  time = 71
+
+Variables:
+  time('time',) float64
+      standard_name = time
+      units = hours since 1900-01-01 00:00:00
+      calendar = standard
+      axis = T
+  twl('node', 'time') float32
+      _FillValue = 9.969209968386869e+36
+      standard_name = total_water_level
+      long_name = Total Water Level
+      units = m
+      datum = LMSL
+      coordinates = node_lon node_lat time
+      grid_mapping = crs
+  crs() int32
+      grid_mapping_name = latitude_longitude
+      longitude_of_prime_meridian = 0.0
+      semi_major_axis = 6378137.0
+      inverse_flattening = 298.257223563
+  node_index('node',) int32
+      long_name = 1-based index, matches original model node numbering
+      cf_role = timeseries_id
+  node_lon('node',) float64
+      standard_name = longitude
+      long_name = Longitude of matched model mesh node
+      units = degrees_east
+  node_lat('node',) float64
+      standard_name = latitude
+      long_name = Latitude of matched model mesh node
+      units = degrees_north
+  node_depth('node',) float64
+      standard_name = sea_floor_depth_below_geoid
+      long_name = Depth of matched mesh node below geoid
+      units = m
+      positive = down
+  point_lon('node',) float64
+      standard_name = longitude
+      long_name = Original CSV point longitude (coastal3K)
+      units = degrees_east
+  point_lat('node',) float64
+      standard_name = latitude
+      long_name = Original CSV point latitude (coastal3K)
+      units = degrees_north
+  dist_km('node',) float32
+      long_name = Distance from CSV point to matched mesh node
+      units = km
+
+Time range: 1979-04-01 01:00:00 -> 1979-04-03 23:00:00 (71 steps)
+
+First 5 nodes, static fields:
+  node_index: [5944637 5785580 5676826 5592685 5509959]
+  node_lon: [ 179.99091753 -177.2852233  -175.06666342 -174.03134147 -170.35726401]
+  node_lat: [68.99689323 68.22857529 67.54146916 67.09706979 66.33407193]
+  node_depth: [10.40436505  4.14814819 11.9428571   9.42954517 18.17559545]
+  point_lon: [ 180.         -177.28996877 -175.08243518 -174.04385113 -170.35568131]
+  point_lat: [68.993778   68.23119721 67.53764367 67.08991213 66.32927347]
+  dist_km: [0.5010355  0.35113874 0.7936342  0.9625941  0.5382218 ]
+
+First 5 nodes x first 5 timesteps of twl:
+[[-0.4352966  -0.3389715  -0.26211607 -0.21475387 -0.26332766]
+ [-0.5125521  -0.4368701  -0.34071514 -0.25778094 -0.26652887]
+ [-0.54828703 -0.50948036 -0.44615135 -0.34799916 -0.29326892]
+ [-0.500337   -0.52982414 -0.46516266 -0.389174   -0.32123306]
+ [-0.28176478 -0.40398127 -0.4302095  -0.4754558  -0.4578976 ]]
