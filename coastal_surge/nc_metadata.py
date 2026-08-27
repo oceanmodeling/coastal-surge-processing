@@ -680,8 +680,13 @@ def get_node_index_scheme(model_name):
 
 def model_node_long_name(model_name, what):
     """e.g. model_node_long_name('ADCIRC', 'Longitude') -> 'Longitude of
-    matched ADCIRC mesh node'."""
-    return f'{what} of matched {model_name} mesh node'
+    matched model mesh node'.
+
+    Takes model_name for signature symmetry with callers that key off it,
+    but the source model name is deliberately left out of the rendered
+    text (see the `model_name` global attribute for that instead).
+    """
+    return f'{what} of matched model mesh node'
 
 
 def write_node_index(ds, model_name, node_index, dim='node'):
@@ -713,8 +718,8 @@ def write_node_index(ds, model_name, node_index, dim='node'):
     if scheme['dims'] == 1:
         node_index = np.asarray(node_index)
         v = ds.createVariable('node_index', 'i4', (dim,), zlib=True, complevel=1)
-        v.long_name = (f'{base}-based index, matches original {model_name} '
-                       f'model node numbering')
+        v.long_name = (f'{base}-based index, matches original model node '
+                       f'numbering')
         v.cf_role = 'timeseries_id'
         v[:] = node_index + base
     else:
@@ -724,14 +729,14 @@ def write_node_index(ds, model_name, node_index, dim='node'):
                 f'{model_name} uses 2-D (i, j) indexing; node_index must '
                 f'have shape (n, 2), got {node_index.shape}')
         v = ds.createVariable('node_i', 'i4', (dim,), zlib=True, complevel=1)
-        v.long_name = (f'{base}-based i-index, matches original {model_name} '
-                       f'model node numbering')
+        v.long_name = (f'{base}-based i-index, matches original model node '
+                       f'numbering')
         v.cf_role = 'timeseries_id'
         v[:] = node_index[:, 0] + base
 
         v = ds.createVariable('node_j', 'i4', (dim,), zlib=True, complevel=1)
-        v.long_name = (f'{base}-based j-index, matches original {model_name} '
-                       f'model node numbering')
+        v.long_name = (f'{base}-based j-index, matches original model node '
+                       f'numbering')
         v[:] = node_index[:, 1] + base
 
 
