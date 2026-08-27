@@ -1,0 +1,144 @@
+=== ssgh_day_Argonne_CFSR_Reanalysis_coastal3K_197901-197912.nc ===
+
+Global attributes:
+  Conventions = CF-1.8
+  featureType = timeSeries
+  Metadata_Conventions = Unidata Dataset Discovery v1.0
+  title = Full-period daily maximum Storm Surge Height at the official SurgeMIP coastal3K points
+  summary = Daily maximum storm surge height, computed from hourly values at the official SurgeMIP coastal3K points, over the full simulation period.
+  creation_date = 2026-08-27T21:22:05Z
+  tracking_id = hdl:21.14100/2765421e-5b9b-489a-b14b-70ab7cd15359
+  history = 
+  id = SurgeMIP_shoreline_waterlevels
+  project = SurgeMIP
+  acknowledgment = This work was supported by the U.S. Department of Energy, Office of Science.
+  contact = William J. Pringle, wpringle@anl.gov
+  creator_name = Coleman Blakely
+  creator_id = 
+  creator_email = cblakely@anl.gov
+  researcher_name = Coleman Blakely
+  researcher_id = 
+  researcher_email = cblakely@anl.gov
+  researcher_affiliation = Argonne National Laboratory
+  license = CC-BY-4.0
+  institution = Argonne National Laboratory
+  institution_id = Argonne
+  further_info_url = https://cblakely97.github.io/surgemip-dashboard/
+  sea_name = global
+  source = ADCIRC STOFS2D-Global
+  source_id = CFSR
+  forcing = CFSR
+  experiment_id = Reanalysis
+  realm = ocean
+  product = model-output
+  frequency = day
+  table_id = DailyMax
+  variable_id = ssgh
+  location = coastal3K
+  keywords = storm surge; coastal flooding; water level; ADCIRC; SurgeMIP
+  standard_name_vocabulary = CF Standard Name Table
+  references = https://github.com/CHLNDDEV/OceanMesh2D/
+  comment = 
+  source_csv = coastal_points_gsshs_low_200km_3k-pts.csv
+  daily_max_method = Calendar-day maximum of the hourly series, with no cross-day adjustment.
+  model_name = ADCIRC
+  geospatial_lat_min = -68.7590432162
+  geospatial_lat_max = 83.6266710401
+  geospatial_lat_units = degrees_north
+  geospatial_lat_resolution = point
+  geospatial_lon_min = -179.35018566880004
+  geospatial_lon_max = 179.9926898286
+  geospatial_lon_units = degrees_east
+  geospatial_lon_resolution = point
+  geospatial_bounds = POLYGON((-179.35018566880004 -68.7590432162, 179.9926898286 -68.7590432162, 179.9926898286 83.6266710401, -179.35018566880004 83.6266710401, -179.35018566880004 -68.7590432162))
+  geospatial_bounds_crs = EPSG:4326
+  geospatial_vertical_min = 0.3
+  geospatial_vertical_max = 1360.890625
+  geospatial_vertical_units = m
+  geospatial_vertical_positive = down
+  time_coverage_start = 1979-04-01 00:00:00
+  time_coverage_end = 1979-04-03 00:00:00
+
+Dimensions:
+  node = 3291
+  time = 3
+
+Variables:
+  time('time',) float64
+      standard_name = time
+      units = hours since 1900-01-01 00:00:00
+      calendar = standard
+      axis = T
+      long_name = Start of calendar day
+  year('time',) int16
+      long_name = Calendar year
+  month('time',) int16
+      long_name = Calendar month (1-12)
+  day('time',) int16
+      long_name = Calendar day of month (1-31)
+  ssgh('node', 'time') float32
+      _FillValue = 9.969209968386869e+36
+      standard_name = storm_surge_height
+      long_name = Storm Surge Height
+      units = m
+      cell_methods = time: maximum within days
+      coordinates = node_lon node_lat time
+      grid_mapping = crs
+  ssgh_time('node', 'time') float64
+      _FillValue = 9.96921e+36
+      units = hours since 1900-01-01 00:00:00
+      calendar = standard
+      long_name = Time of the retained daily maximum ssgh
+  crs() int32
+      grid_mapping_name = latitude_longitude
+      longitude_of_prime_meridian = 0.0
+      semi_major_axis = 6378137.0
+      inverse_flattening = 298.257223563
+  node_index('node',) int32
+      long_name = 1-based index, matches original model node numbering
+      cf_role = timeseries_id
+  node_lon('node',) float64
+      standard_name = longitude
+      long_name = Longitude of matched model mesh node
+      units = degrees_east
+  node_lat('node',) float64
+      standard_name = latitude
+      long_name = Latitude of matched model mesh node
+      units = degrees_north
+  node_depth('node',) float64
+      standard_name = sea_floor_depth_below_geoid
+      long_name = Depth of matched mesh node below geoid
+      units = m
+      positive = down
+  point_lon('node',) float64
+      standard_name = longitude
+      long_name = Original CSV point longitude (coastal3K)
+      units = degrees_east
+  point_lat('node',) float64
+      standard_name = latitude
+      long_name = Original CSV point latitude (coastal3K)
+      units = degrees_north
+  dist_km('node',) float32
+      long_name = Distance from CSV point to matched mesh node
+      units = km
+
+Calendar days covered:
+  1979-04-01
+  1979-04-02
+  1979-04-03
+
+First 5 nodes, static fields:
+  node_index: [5944637 5785580 5676826 5592685 5509959]
+  node_lon: [ 179.99091753 -177.2852233  -175.06666342 -174.03134147 -170.35726401]
+  node_lat: [68.99689323 68.22857529 67.54146916 67.09706979 66.33407193]
+  node_depth: [10.40436505  4.14814819 11.9428571   9.42954517 18.17559545]
+  point_lon: [ 180.         -177.28996877 -175.08243518 -174.04385113 -170.35568131]
+  point_lat: [68.993778   68.23119721 67.53764367 67.08991213 66.32927347]
+  dist_km: [0.5010355  0.35113874 0.7936342  0.9625941  0.5382218 ]
+
+First 5 nodes, all days of ssgh:
+[[0.00852554 0.00648965 0.00420557]
+ [0.00617569 0.00791293 0.00575654]
+ [0.01495544 0.00799239 0.00977017]
+ [0.00887043 0.00828852 0.00766787]
+ [0.0118043  0.00672871 0.00605737]]

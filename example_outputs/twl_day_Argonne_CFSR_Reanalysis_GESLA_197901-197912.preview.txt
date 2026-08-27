@@ -1,0 +1,154 @@
+=== twl_day_Argonne_CFSR_Reanalysis_GESLA_197901-197912.nc ===
+
+Global attributes:
+  Conventions = CF-1.8
+  featureType = timeSeries
+  Metadata_Conventions = Unidata Dataset Discovery v1.0
+  title = Full-period daily maximum Total Water Level at the official SurgeMIP GESLA stations
+  summary = Daily maximum total water level, computed from hourly values at the official SurgeMIP GESLA stations, over the full simulation period.
+  creation_date = 2026-08-27T21:22:14Z
+  tracking_id = hdl:21.14100/8d379d7e-cd57-4d22-8e29-9aeba431cb21
+  history = 
+  id = SurgeMIP_shoreline_waterlevels
+  project = SurgeMIP
+  acknowledgment = This work was supported by the U.S. Department of Energy, Office of Science.
+  contact = William J. Pringle, wpringle@anl.gov
+  creator_name = Coleman Blakely
+  creator_id = 
+  creator_email = cblakely@anl.gov
+  researcher_name = Coleman Blakely
+  researcher_id = 
+  researcher_email = cblakely@anl.gov
+  researcher_affiliation = Argonne National Laboratory
+  license = CC-BY-4.0
+  institution = Argonne National Laboratory
+  institution_id = Argonne
+  further_info_url = https://cblakely97.github.io/surgemip-dashboard/
+  sea_name = global
+  source = ADCIRC STOFS2D-Global
+  source_id = CFSR
+  forcing = CFSR
+  experiment_id = Reanalysis
+  realm = ocean
+  product = model-output
+  frequency = day
+  table_id = DailyMax
+  variable_id = twl
+  location = GESLA
+  keywords = storm surge; coastal flooding; water level; ADCIRC; SurgeMIP
+  standard_name_vocabulary = CF Standard Name Table
+  references = https://github.com/CHLNDDEV/OceanMesh2D/
+  comment = 
+  source_csv = SurgeMIP_GESLA_stnlist.csv
+  daily_max_method = Calendar-day maximum of the hourly series, with no cross-day adjustment.
+  model_name = ADCIRC
+  geospatial_lat_min = -67.5583722502
+  geospatial_lat_max = 78.942795751
+  geospatial_lat_units = degrees_north
+  geospatial_lat_resolution = point
+  geospatial_lon_min = -178.1639889732
+  geospatial_lon_max = 179.209615209
+  geospatial_lon_units = degrees_east
+  geospatial_lon_resolution = point
+  geospatial_bounds = POLYGON((-178.1639889732 -67.5583722502, 179.209615209 -67.5583722502, 179.209615209 78.942795751, -178.1639889732 78.942795751, -178.1639889732 -67.5583722502))
+  geospatial_bounds_crs = EPSG:4326
+  geospatial_vertical_min = 0.3
+  geospatial_vertical_max = 4996.5302734
+  geospatial_vertical_units = m
+  geospatial_vertical_positive = down
+  time_coverage_start = 1979-04-01 00:00:00
+  time_coverage_end = 1979-04-07 00:00:00
+
+Dimensions:
+  node = 550
+  time = 7
+
+Variables:
+  time('time',) float64
+      standard_name = time
+      units = hours since 1900-01-01 00:00:00
+      calendar = standard
+      axis = T
+      long_name = Start of calendar day
+  year('time',) int16
+      long_name = Calendar year
+  month('time',) int16
+      long_name = Calendar month (1-12)
+  day('time',) int16
+      long_name = Calendar day of month (1-31)
+  twl('node', 'time') float32
+      _FillValue = 9.969209968386869e+36
+      standard_name = total_water_level
+      long_name = Total Water Level
+      units = m
+      datum = LMSL
+      cell_methods = time: maximum within days
+      coordinates = node_lon node_lat time
+      grid_mapping = crs
+  twl_time('node', 'time') float64
+      _FillValue = 9.96921e+36
+      units = hours since 1900-01-01 00:00:00
+      calendar = standard
+      long_name = Time of the retained daily maximum twl
+  crs() int32
+      grid_mapping_name = latitude_longitude
+      longitude_of_prime_meridian = 0.0
+      semi_major_axis = 6378137.0
+      inverse_flattening = 298.257223563
+  node_index('node',) int32
+      long_name = 1-based index, matches original model node numbering
+      cf_role = timeseries_id
+  node_lon('node',) float64
+      standard_name = longitude
+      long_name = Longitude of matched model mesh node
+      units = degrees_east
+  node_lat('node',) float64
+      standard_name = latitude
+      long_name = Latitude of matched model mesh node
+      units = degrees_north
+  node_depth('node',) float64
+      standard_name = sea_floor_depth_below_geoid
+      long_name = Depth of matched mesh node below geoid
+      units = m
+      positive = down
+  point_lon('node',) float64
+      standard_name = longitude
+      long_name = Original CSV point longitude (GESLA)
+      units = degrees_east
+  point_lat('node',) float64
+      standard_name = latitude
+      long_name = Original CSV point latitude (GESLA)
+      units = degrees_north
+  dist_km('node',) float32
+      long_name = Distance from CSV point to matched mesh node
+      units = km
+
+Calendar days covered:
+  1979-04-01
+  1979-04-02
+  1979-04-03
+  1979-04-04
+  1979-04-05
+  1979-04-06
+  1979-04-07
+
+First 5 nodes, static fields:
+  node_index: [2587374 2770708 9260077 2125309 4401277]
+  node_lon: [-122.46451353 -157.86714971  -94.79270497 -117.17354268  -79.53394764]
+  node_lat: [37.80662723 21.30653692 29.31016552 32.71311071  8.96577208]
+  node_depth: [ 3.96004568 12.22910828 11.63812351 11.39236917  5.        ]
+  point_lon: [-122.465 -157.867  -94.793 -117.173  -79.573]
+  point_lat: [37.807 21.307 29.31  32.713  8.965]
+  dist_km: [0.05953671 0.05377674 0.03401558 0.05224359 4.2902303 ]
+
+First 5 nodes, all days of twl:
+[[0.6603614  0.5836833  0.44895908 0.4473037  0.4343075  0.4272309
+  0.4356796 ]
+ [0.2969441  0.26830268 0.20094483 0.19755211 0.20913392 0.21626799
+  0.20492361]
+ [0.48925492 0.4571213  0.36336696 0.27445012 0.2110213  0.18229221
+  0.29081976]
+ [0.74090767 0.69731534 0.5017035  0.3070129  0.35651872 0.41935277
+  0.4754511 ]
+ [2.5876234  2.685433   2.1399546  1.6183339  1.2759322  1.2882993
+  1.0674418 ]]
