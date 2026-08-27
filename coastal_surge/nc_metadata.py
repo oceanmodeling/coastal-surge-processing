@@ -119,6 +119,29 @@ VARIABLES = {
 }
 
 
+# Human-readable point-set description for each --location value, used in
+# pipeline scripts' output title/summary and the point_lon/point_lat
+# long_name (which names the source CSV the points were matched from).
+# Extend this if a new --location value is introduced; an unrecognized
+# value falls back to a generic phrasing built from the location code
+# itself. Shared by every pipeline step (extraction, detiding, daily/
+# monthly max) so a --location's description stays consistent as it
+# propagates downstream via each output's inherited `location` attribute.
+POINT_SET_LABELS = {
+    'coastal35K': ('shoreline points', 'GSHHS'),
+    'GESLA': ('GESLA stations', 'GESLA'),
+}
+
+
+def point_set_label(metadata):
+    """
+    Return (descriptive_name, source_csv_label) for metadata['location'],
+    e.g. ('GESLA stations', 'GESLA') or ('shoreline points', 'GSHHS').
+    """
+    location = metadata['location']
+    return POINT_SET_LABELS.get(location, (f'{location} points', location))
+
+
 def resolve_datum(metadata, variable_key):
     """
     Resolve the vertical datum for a variable's own values (e.g. 'LMSL' for

@@ -213,14 +213,16 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    point_set_name, point_set_source = nc_metadata.point_set_label(metadata)
+
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
     nc_metadata.set_global_attrs(
         ds, metadata,
         title=f'Full-period monthly maximum {var_def["long_name"]} '
-              f'at SurgeMIP official shoreline',
+              f'at the official SurgeMIP {point_set_name}',
         summary=(f'Monthly maximum {var_def["long_name"].lower()}, computed '
-                 f'from hourly values at the official SurgeMIP shoreline '
-                 f'points, over the full simulation period.'),
+                 f'from hourly values at the official SurgeMIP '
+                 f'{point_set_name}, over the full simulation period.'),
         timestep='MonthlyMax', variable_key=variable_key,
         feature_type='timeSeries',
         extra={
@@ -297,7 +299,8 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v.flag_meanings = 'unadjusted adjusted'
     v[:] = adj_arr
 
-    nc_metadata.write_node_block(ds, node['model_name'], node)
+    nc_metadata.write_node_block(ds, node['model_name'], node,
+                                 point_set_source=point_set_source)
 
     nc_metadata.set_geospatial_extent(
         ds, node['node_lon'], node['node_lat'], node['node_depth'],

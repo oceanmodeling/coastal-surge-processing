@@ -73,22 +73,6 @@ VARIABLE_KEY = 'WaterLevel'
 # CF standard fill value for float32
 CF_FILL_F32 = 9.96921e+36
 
-# Human-readable point-set description for each --location value, used in
-# the output title/summary and the point_lon/point_lat long_name (which
-# names the source CSV the points were matched from). Extend this if a new
-# --location value is introduced; an unrecognized value falls back to a
-# generic phrasing built from the location code itself.
-POINT_SET_LABELS = {
-    'coastal35K': ('shoreline points', 'GSHHS'),
-    'GESLA': ('GESLA stations', 'GESLA'),
-}
-
-
-def point_set_label(metadata):
-    """Return (descriptive_name, source_csv_label) for metadata['location']."""
-    location = metadata['location']
-    return POINT_SET_LABELS.get(location, (f'{location} points', location))
-
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -334,7 +318,7 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
     var_def = nc_metadata.VARIABLES[VARIABLE_KEY]
     n_times = len(times)
 
-    point_set_name, point_set_source = point_set_label(metadata)
+    point_set_name, point_set_source = nc_metadata.point_set_label(metadata)
 
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
     nc_metadata.set_global_attrs(

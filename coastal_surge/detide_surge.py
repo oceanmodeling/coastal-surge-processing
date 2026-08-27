@@ -280,14 +280,16 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
     n_nodes = surge_data.shape[0]
     n_times = surge_data.shape[1]
 
+    point_set_name, point_set_source = nc_metadata.point_set_label(metadata)
+
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
     nc_metadata.set_global_attrs(
         ds, metadata,
-        title=f'Hourly {var_def["long_name"]} at SurgeMIP official shoreline',
+        title=f'Hourly {var_def["long_name"]} at the official SurgeMIP {point_set_name}',
         summary=(f'Hourly {var_def["long_name"].lower()}, the non-tidal '
                  f'residual of total water level, computed by subtracting '
                  f'a least-squares tidal harmonic fit from hourly ADCIRC '
-                 f'water levels at the official SurgeMIP shoreline points.'),
+                 f'water levels at the official SurgeMIP {point_set_name}.'),
         timestep='Hourly', variable_key=OUT_VARIABLE_KEY,
         feature_type='timeSeries',
         extra={
@@ -328,7 +330,8 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
         j = min(i + chunk, n_nodes)
         v[i:j, :] = surge_data[i:j, :]
 
-    nc_metadata.write_node_block(ds, node['model_name'], node)
+    nc_metadata.write_node_block(ds, node['model_name'], node,
+                                 point_set_source=point_set_source)
     nc_metadata.set_geospatial_extent(
         ds, node['node_lon'], node['node_lat'], node['node_depth'],
         positive='down',

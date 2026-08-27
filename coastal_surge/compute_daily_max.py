@@ -137,14 +137,16 @@ def write_daily_max(path, node, metadata, variable_key, days):
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    point_set_name, point_set_source = nc_metadata.point_set_label(metadata)
+
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
     nc_metadata.set_global_attrs(
         ds, metadata,
         title=f'Full-period daily maximum {var_def["long_name"]} '
-              f'at SurgeMIP official shoreline',
+              f'at the official SurgeMIP {point_set_name}',
         summary=(f'Daily maximum {var_def["long_name"].lower()}, computed '
-                 f'from hourly values at the official SurgeMIP shoreline '
-                 f'points, over the full simulation period.'),
+                 f'from hourly values at the official SurgeMIP '
+                 f'{point_set_name}, over the full simulation period.'),
         timestep='DailyMax', variable_key=variable_key,
         feature_type='timeSeries',
         extra={
@@ -207,7 +209,8 @@ def write_daily_max(path, node, metadata, variable_key, days):
     v.long_name = f'Time of the retained daily maximum {var_def["name"]}'
     v[:] = time_arr
 
-    nc_metadata.write_node_block(ds, node['model_name'], node)
+    nc_metadata.write_node_block(ds, node['model_name'], node,
+                                 point_set_source=point_set_source)
 
     nc_metadata.set_geospatial_extent(
         ds, node['node_lon'], node['node_lat'], node['node_depth'],
