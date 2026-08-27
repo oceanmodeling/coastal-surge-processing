@@ -738,7 +738,7 @@ def read_node_index(ds, dim='node'):
     return model_name, node_index
 
 
-def write_node_block(ds, model_name, node, dim='node'):
+def write_node_block(ds, model_name, node, dim='node', point_set_source='GSHHS'):
     """
     Write the full set of static per-node variables shared by every
     SurgeMIP pipeline output: crs, node_index (see write_node_index),
@@ -755,6 +755,9 @@ def write_node_block(ds, model_name, node, dim='node'):
         'node_lon', 'node_lat', 'node_depth', 'point_lon', 'point_lat',
         'dist_km' : ndarray (n,)
     dim : str
+    point_set_source : str
+        Short label for the source CSV point set (e.g. 'GSHHS', 'GESLA'),
+        written parenthetically in the point_lon/point_lat long_name.
     """
     crs_v = ds.createVariable('crs', 'i4')
     crs_v.grid_mapping_name = 'latitude_longitude'
@@ -773,9 +776,9 @@ def write_node_block(ds, model_name, node, dim='node'):
         ('node_depth', 'node_depth', 'sea_floor_depth_below_geoid',
          'Depth of matched mesh node below geoid', 'm'),
         ('point_lon', 'point_lon', 'longitude',
-         'Original CSV point longitude (GSHHS)', 'degrees_east'),
+         f'Original CSV point longitude ({point_set_source})', 'degrees_east'),
         ('point_lat', 'point_lat', 'latitude',
-         'Original CSV point latitude (GSHHS)', 'degrees_north'),
+         f'Original CSV point latitude ({point_set_source})', 'degrees_north'),
     ]:
         v = ds.createVariable(name, 'f8', (dim,), zlib=True, complevel=1)
         v.standard_name = std_name

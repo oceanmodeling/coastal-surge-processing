@@ -73,6 +73,22 @@ VARIABLE_KEY = 'WaterLevel'
 # CF standard fill value for float32
 CF_FILL_F32 = 9.96921e+36
 
+# Human-readable point-set description for each --location value, used in
+# the output title/summary and the point_lon/point_lat long_name (which
+# names the source CSV the points were matched from). Extend this if a new
+# --location value is introduced; an unrecognized value falls back to a
+# generic phrasing built from the location code itself.
+POINT_SET_LABELS = {
+    'coastal35K': ('shoreline points', 'GSHHS'),
+    'GESLA': ('GESLA stations', 'GESLA'),
+}
+
+
+def point_set_label(metadata):
+    """Return (descriptive_name, source_csv_label) for metadata['location']."""
+    location = metadata['location']
+    return POINT_SET_LABELS.get(location, (f'{location} points', location))
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -318,13 +334,15 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
     var_def = nc_metadata.VARIABLES[VARIABLE_KEY]
     n_times = len(times)
 
+    point_set_name, point_set_source = point_set_label(metadata)
+
     ds = nc.Dataset(str(out), 'w', format='NETCDF4')
     nc_metadata.set_global_attrs(
         ds, metadata,
-        title=f'Hourly {var_def["long_name"]} at SurgeMIP official shoreline',
+        title=f'Hourly {var_def["long_name"]} at the official SurgeMIP {point_set_name}',
         summary=(f'Hourly {var_def["long_name"].lower()} extracted from '
                  f'ADCIRC fort.63.nc output at the official SurgeMIP '
-                 f'shoreline points.'),
+                 f'{point_set_name}.'),
         timestep='Hourly', variable_key=VARIABLE_KEY,
         feature_type='timeSeries',
         extra={'source_csv': csv_name},
@@ -360,7 +378,8 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
     node = dict(node_index=node_index, node_lon=node_lon, node_lat=node_lat,
                 node_depth=node_depth, point_lon=point_lon,
                 point_lat=point_lat, dist_km=dist_km)
-    nc_metadata.write_node_block(ds, model_name, node)
+    nc_metadata.write_node_block(ds, model_name, node,
+                                 point_set_source=point_set_source)
     nc_metadata.set_geospatial_extent(
         ds, node_lon, node_lat, node_depth, positive='down',
         crs=metadata.get('geospatial_bounds_crs', 'EPSG:4326'),
