@@ -1,0 +1,135 @@
+=== ssgh_1hr_Argonne_CFSR_Reanalysis_coastal3K_197904-197904.nc ===
+
+Global attributes:
+  Conventions = CF-1.8
+  featureType = timeSeries
+  Metadata_Conventions = Unidata Dataset Discovery v1.0
+  title = Hourly Storm Surge Height at the official SurgeMIP coastal3K points
+  summary = Hourly storm surge height, the non-tidal residual of total water level, computed by subtracting a least-squares tidal harmonic fit from hourly ADCIRC water levels at the official SurgeMIP coastal3K points.
+  creation_date = 2026-08-27T21:18:15Z
+  tracking_id = hdl:21.14100/d972c4d8-01e1-4919-b6ff-1c439691c531
+  history = 
+  id = SurgeMIP_shoreline_waterlevels
+  project = SurgeMIP
+  acknowledgment = This work was supported by the U.S. Department of Energy, Office of Science.
+  contact = William J. Pringle, wpringle@anl.gov
+  creator_name = Coleman Blakely
+  creator_id = 
+  creator_email = cblakely@anl.gov
+  researcher_name = Coleman Blakely
+  researcher_id = 
+  researcher_email = cblakely@anl.gov
+  researcher_affiliation = Argonne National Laboratory
+  license = CC-BY-4.0
+  institution = Argonne National Laboratory
+  institution_id = Argonne
+  further_info_url = https://cblakely97.github.io/surgemip-dashboard/
+  sea_name = global
+  source = ADCIRC STOFS2D-Global
+  source_id = CFSR
+  forcing = CFSR
+  experiment_id = Reanalysis
+  realm = ocean
+  product = model-output
+  frequency = 1hr
+  table_id = Hourly
+  variable_id = ssgh
+  location = coastal3K
+  keywords = storm surge; coastal flooding; water level; ADCIRC; SurgeMIP
+  standard_name_vocabulary = CF Standard Name Table
+  references = https://github.com/CHLNDDEV/OceanMesh2D/
+  comment = 
+  source_csv = coastal_points_gsshs_low_200km_3k-pts.csv
+  detiding_method = Vectorized linear least-squares harmonic analysis across all years. Tidal coefficients: C = (A^T A)^{-1} A^T Y. Nodal corrections every 240.0h via pytides2.
+  detiding_constituents = alpha1, 2Q1, sigma1, Q1, rho1, O1, tau1, beta1, NO1, chi1, pi1, P1, S1, K1, psi1, phi1, theta1, J1, SO1, OO1, upsilon1, OQ2, epsilon2, 2N2, mu2, N2, nu2, H1, M2, H2, MKS2, lambda2, L2, T2, S2, R2, K2, MSN2, eta2, MO3, M3, SO3, MK3, SK3, MN4, M4, SN4, MS4, MK4, S4, SK4, 2MK5, 2SK5, 2MN6, M6, 2MS6, 2MK6, 2SM6, MSK6, 3MK7, M8
+  detiding_excluded_constituents = Sa, Ssa
+  model_name = ADCIRC
+  geospatial_lat_min = -68.7590432162
+  geospatial_lat_max = 83.6266710401
+  geospatial_lat_units = degrees_north
+  geospatial_lat_resolution = point
+  geospatial_lon_min = -179.35018566880004
+  geospatial_lon_max = 179.9926898286
+  geospatial_lon_units = degrees_east
+  geospatial_lon_resolution = point
+  geospatial_bounds = POLYGON((-179.35018566880004 -68.7590432162, 179.9926898286 -68.7590432162, 179.9926898286 83.6266710401, -179.35018566880004 83.6266710401, -179.35018566880004 -68.7590432162))
+  geospatial_bounds_crs = EPSG:4326
+  geospatial_vertical_min = 0.3
+  geospatial_vertical_max = 1360.890625
+  geospatial_vertical_units = m
+  geospatial_vertical_positive = down
+  time_coverage_start = 1979-04-01 01:00:00
+  time_coverage_end = 1979-04-03 23:00:00
+
+Dimensions:
+  node = 3291
+  time = 71
+
+Variables:
+  time('time',) float64
+      standard_name = time
+      units = hours since 1900-01-01 00:00:00
+      calendar = standard
+      axis = T
+  ssgh('node', 'time') float32
+      _FillValue = 9.969209968386869e+36
+      standard_name = storm_surge_height
+      long_name = Storm Surge Height
+      units = m
+      coordinates = node_lon node_lat time
+      grid_mapping = crs
+  crs() int32
+      grid_mapping_name = latitude_longitude
+      longitude_of_prime_meridian = 0.0
+      semi_major_axis = 6378137.0
+      inverse_flattening = 298.257223563
+  node_index('node',) int32
+      long_name = 1-based index, matches original model node numbering
+      cf_role = timeseries_id
+  node_lon('node',) float64
+      standard_name = longitude
+      long_name = Longitude of matched model mesh node
+      units = degrees_east
+  node_lat('node',) float64
+      standard_name = latitude
+      long_name = Latitude of matched model mesh node
+      units = degrees_north
+  node_depth('node',) float64
+      standard_name = sea_floor_depth_below_geoid
+      long_name = Depth of matched mesh node below geoid
+      units = m
+      positive = down
+  point_lon('node',) float64
+      standard_name = longitude
+      long_name = Original CSV point longitude (coastal3K)
+      units = degrees_east
+  point_lat('node',) float64
+      standard_name = latitude
+      long_name = Original CSV point latitude (coastal3K)
+      units = degrees_north
+  dist_km('node',) float32
+      long_name = Distance from CSV point to matched mesh node
+      units = km
+
+Time range: 1979-04-01 01:00:00 -> 1979-04-03 23:00:00 (71 steps)
+
+First 5 nodes, static fields:
+  node_index: [5944637 5785580 5676826 5592685 5509959]
+  node_lon: [ 179.99091753 -177.2852233  -175.06666342 -174.03134147 -170.35726401]
+  node_lat: [68.99689323 68.22857529 67.54146916 67.09706979 66.33407193]
+  node_depth: [10.40436505  4.14814819 11.9428571   9.42954517 18.17559545]
+  point_lon: [ 180.         -177.28996877 -175.08243518 -174.04385113 -170.35568131]
+  point_lat: [68.993778   68.23119721 67.53764367 67.08991213 66.32927347]
+  dist_km: [0.5010355  0.35113874 0.7936342  0.9625941  0.5382218 ]
+
+First 5 nodes x first 5 timesteps of ssgh:
+[[ 2.09187488e-06 -2.03680484e-05  9.00486557e-05 -2.30738238e-04
+   3.27247806e-04]
+ [-1.16323890e-05  1.15998781e-04 -5.60786633e-04  1.73746201e-03
+  -3.81883280e-03]
+ [ 8.98674898e-06 -7.54595894e-05  3.18921404e-04 -8.70850869e-04
+   1.63592352e-03]
+ [ 1.75565583e-05 -1.59486823e-04  7.24546902e-04 -2.14070734e-03
+   4.49156947e-03]
+ [ 1.13029955e-05 -1.07908243e-04  5.04382770e-04 -1.51282665e-03
+   3.19738849e-03]]

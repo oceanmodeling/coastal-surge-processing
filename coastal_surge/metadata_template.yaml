@@ -8,8 +8,12 @@
 #
 # Any field left blank (or omitted entirely) falls back to the built-in
 # default in nc_metadata.py. Fields that describe the data itself rather
-# than its provenance (geospatial extent, time coverage, date_created,
-# title/summary) are computed automatically and are not set here.
+# than its provenance (geospatial extent, time coverage, creation_date,
+# title/summary) are computed automatically and are not set here. This
+# also includes the CMIP6-style institution_id/source_id/experiment_id/
+# variable_id/table_id/frequency/tracking_id attributes (see
+# http://goo.gl/v1drZl) — those are derived from group_name/
+# climate_forcing/scenario below rather than set directly.
 # ---------------------------------------------------------------------------
 
 # Short, unique dataset identifier (no spaces).
@@ -43,23 +47,56 @@ license: ""
 # Organization that produced the data.
 institution: "Argonne National Laboratory"
 
-# Persistent identifier for the institution above, e.g. a ROR URL:
-# "https://ror.org/03qjp1d79".
-institution_id: ""
-
 # Name of the sea/ocean region covered, e.g. "global", "Gulf of Mexico".
 sea_name: "global"
 
-# Model description, e.g.
-# "ADCIRC STOFS2D-Global, CFS reanalysis atmospheric forcing".
+# CMIP6-style "realm" attribute, e.g. "ocean".
+realm: "ocean"
+
+# Optional URL with further documentation about this dataset/run
+# (CMIP6's further_info_url attribute; no fixed template since SurgeMIP
+# isn't a registered CMIP6 activity).
+further_info_url: ""
+
+# Full descriptive name of the model system that produced this data,
+# ideally spelled out rather than abbreviated, e.g. "ADCIRC unstructured-
+# mesh storm surge model (STOFS2D-Global setup) forced by CFS reanalysis
+# atmospheric fields".
 source: ""
 
 # Atmospheric/tidal forcing dataset(s) driving the model, e.g.
-# "REMO MPI-ESM rcp26 and FES2004".
+# "REMO MPI-ESM rcp26 and FES2004". If left blank, this defaults to
+# whatever "climate_forcing" resolves to below (e.g. "CFSv2"), since they
+# usually name the same thing; set this explicitly only if you want a
+# fuller/different description than that short filename token.
 forcing: ""
 
-# Horizontal coordinate reference system of the station coordinates.
-crs: "WGS84"
+# Vertical datum of the water level variable's own values, e.g. "LMSL"
+# (local mean sea level) or "NAVD88" — written as that variable's `datum`
+# attribute. Distinct from node_depth's vertical datum
+# (geospatial_bounds_vertical_crs below). If left blank, this defaults per
+# variable: "LMSL" for twl, blank for ssgh (a detided residual with no
+# fixed absolute vertical reference) — see VARIABLES in nc_metadata.py. Set
+# this explicitly only to override that default.
+datum: ""
+
+# --- Horizontal/vertical CRS of the source model's own coordinates,
+# written on the geospatial_bounds bounding box (ACDD geospatial_bounds_crs
+# / geospatial_bounds_vertical_crs) — there's no separate "source CRS"
+# attribute elsewhere. ---
+
+# Horizontal CRS of the station coordinates, e.g. an EPSG code. WGS84
+# lat/lon is assumed throughout this pipeline (see the fixed WGS84
+# ellipsoid parameters on the `crs` variable in nc_metadata.py), so this
+# should only be overridden if that ever changes.
+geospatial_bounds_crs: "EPSG:4326"
+
+# Vertical datum/CRS of `node_depth`, e.g. an EPSG code or geoid/datum
+# name. ADCIRC depth is geoid-referenced, but the specific geoid model
+# (and therefore the correct value here) varies by mesh/campaign, so
+# there's no single default — leave blank to omit the attribute, or set
+# e.g. "EPSG:3855" (EGM2008 height).
+geospatial_bounds_vertical_crs: ""
 
 # Semicolon-separated search keywords.
 keywords: "storm surge; coastal flooding; water level; ADCIRC; SurgeMIP"
@@ -72,3 +109,35 @@ references: ""
 
 # Free-text field for anything else worth noting about this run.
 comment: ""
+
+# ---------------------------------------------------------------------------
+# Naming-convention fields (all four required to build output filenames).
+# Filenames follow a CMIP6-style convention (see
+# https://help.ceda.ac.uk/article/4801-cmip6-data), variable first and
+# time range last:
+#
+#   Variable_TimeStep_GroupName_ClimateForcing_Scenario_Location_TimeRange.nc
+#
+# These four also become the CMIP6-style institution_id/source_id/
+# experiment_id global attributes (group_name/climate_forcing/scenario;
+# location has no CMIP6 equivalent and is written as-is) — see
+# http://goo.gl/v1drZl.
+#
+# Each must be a single filename-safe token: no underscores or spaces
+# (use CamelCase or a plain code instead, e.g. "CFSv2", "SSP4.5"). Each can
+# also be overridden per-run with --group-name/--climate-forcing/--scenario/
+# --location, which take precedence over the values set here.
+# ---------------------------------------------------------------------------
+
+# Short group/institution code, e.g. "Argonne", "Deltares", "Hereon".
+group_name: ""
+
+# Short code for the atmospheric/tidal forcing dataset driving the model,
+# e.g. "CFSv2", "CCSM4", "HadGEM", "JRA3Q".
+climate_forcing: ""
+
+# Short scenario code, e.g. "Reanalysis", "Historical", "SSP4.5".
+scenario: ""
+
+# Short code for the station/point set, e.g. "GESLA", "coastal35K".
+location: ""
