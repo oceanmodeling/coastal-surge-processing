@@ -62,6 +62,7 @@ import sys
 import time as timer
 from pathlib import Path
 
+import cftime
 import netCDF4 as nc
 import numpy as np
 import pandas as pd
@@ -305,12 +306,12 @@ def load_official_points(csv_path, adcirc_path, wet_mask_path=None):
 
 def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
                        node_depth, point_lon, point_lat, dist_km, csv_name,
-                       metadata, times, year_data, model_name):
+                       metadata, times, year_data, model_name, calendar):
     """
     Create and fully write one year's hourly twl NetCDF file in one shot.
 
     year_data : float32 ndarray (n_nodes, n_times)
-    times : pd.DatetimeIndex (n_times,)
+    times : see nc_metadata.read_times(), (n_times,)
     """
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -337,13 +338,13 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
     v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
+    v.calendar = calendar
     v.axis = 'T'
     v[:] = nc_metadata.write_times(ds, 'time', times)
 
-    v = ds.createVariable(var_def['name'], 'f4', ('node', 'time'),
+    v = ds.createVariable(var_def['name'], 'f4', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_times, 24)),
+                          chunksizes=(min(n_times, 24), n_nodes),
                           fill_value=CF_FILL_F32)
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
@@ -357,7 +358,7 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
     chunk = 10000
     for i in range(0, n_nodes, chunk):
         j = min(i + chunk, n_nodes)
-        v[i:j, :] = year_data[i:j, :]
+        v[:, i:j] = year_data[i:j, :].T
 
     node = dict(node_index=node_index, node_lon=node_lon, node_lat=node_lat,
                 node_depth=node_depth, point_lon=point_lon,
@@ -378,13 +379,28 @@ def write_hourly_year(path, n_nodes, node_index, node_lon, node_lat,
 # ---------------------------------------------------------------------------
 
 def read_time_axis(adcirc_path):
+    """Returns (times, calendar) -- see nc_metadata.read_times() for the
+    calendar-dependent return type of `times`."""
     ds = nc.Dataset(str(adcirc_path), 'r')
-    cal = getattr(ds.variables['time'], 'calendar', 'standard')
-    cftime_dates = nc.num2date(ds.variables['time'][:],
-                               ds.variables['time'].units, cal)
-    times = pd.to_datetime([d.isoformat() for d in cftime_dates])
+    calendar = nc_metadata.read_calendar(ds, 'time')
+    times = nc_metadata.read_times(ds, 'time')
     ds.close()
-    return times
+    return times, calendar
+
+
+def clip_bound(timestamp, calendar):
+    """
+    Convert a --start-date/--end-date pd.Timestamp CLI value into a type
+    comparable against a `times` array of the given calendar: itself for a
+    standard-family calendar, otherwise the equivalent cftime.datetime (a
+    non-standard-calendar `times` array can't be compared against a bare
+    pd.Timestamp).
+    """
+    if timestamp is None or calendar in nc_metadata.STANDARD_CALENDARS:
+        return timestamp
+    return cftime.datetime(timestamp.year, timestamp.month, timestamp.day,
+                           timestamp.hour, timestamp.minute, timestamp.second,
+                           calendar=calendar)
 
 
 def extract_year(adcirc_path, sorted_nodes, unsort, batch_size,
@@ -405,21 +421,20 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size,
 
     Returns
     -------
-    times : pd.DatetimeIndex, shape (n_times,)
+    times : see nc_metadata.read_times(), shape (n_times,)
     year_data : ndarray float32, shape (n_points, n_times), CSV row order
+    calendar : str
     """
     ds = nc.Dataset(str(adcirc_path), 'r')
-    cal = getattr(ds.variables['time'], 'calendar', 'standard')
-    cftime_dates = nc.num2date(ds.variables['time'][:],
-                               ds.variables['time'].units, cal)
-    times = pd.to_datetime([d.isoformat() for d in cftime_dates])
+    calendar = nc_metadata.read_calendar(ds, 'time')
+    times = nc_metadata.read_times(ds, 'time')
 
     # Apply date clipping
     mask = np.ones(len(times), dtype=bool)
     if start_date is not None:
-        mask &= times >= start_date
+        mask &= times >= clip_bound(start_date, calendar)
     if end_date is not None:
-        mask &= times <= end_date
+        mask &= times <= clip_bound(end_date, calendar)
     indices = np.where(mask)[0]
     times = times[indices]
 
@@ -461,7 +476,7 @@ def extract_year(adcirc_path, sorted_nodes, unsort, batch_size,
           f'({elapsed / n_times * 1000:.1f}ms/step)')
 
     # Restore CSV row order
-    return times, year_data[unsort, :]
+    return times, year_data[unsort, :], calendar
 
 
 # ---------------------------------------------------------------------------
@@ -531,11 +546,11 @@ def main():
     # campaigns that start mid-year like CFS 1979) get correct YYYYMM ranges.
     todo = []
     for year, adcirc_path in file_list:
-        times = read_time_axis(adcirc_path)
+        times, calendar = read_time_axis(adcirc_path)
         if start_date is not None:
-            times = times[times >= start_date]
+            times = times[times >= clip_bound(start_date, calendar)]
         if end_date is not None:
-            times = times[times <= end_date]
+            times = times[times <= clip_bound(end_date, calendar)]
         if len(times) == 0:
             print(f'  Skipping {year}: no timesteps within date range')
             continue
@@ -558,14 +573,14 @@ def main():
         print(f'Year {year}: {adcirc_path}  [{i + 1}/{len(todo)}]')
         print(f'{"=" * 60}')
 
-        times, year_data = extract_year(
+        times, year_data, calendar = extract_year(
             adcirc_path, sorted_nodes, unsort, args.batch_size,
             start_date=start_date, end_date=end_date)
 
         write_hourly_year(
             out_path, n_nodes, node_index, node_lon, node_lat, node_depth,
             point_lon, point_lat, dist_km, csv_name, metadata, times,
-            year_data, args.model_name)
+            year_data, args.model_name, calendar)
 
         elapsed = timer.time() - total_t0
         print(f'  Year {year} done. Cumulative: {elapsed:.0f}s')
