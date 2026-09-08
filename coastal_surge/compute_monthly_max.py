@@ -41,7 +41,7 @@ Usage:
       --output-dir /path/to/monthly_max/
 
 Dependencies:
-  numpy, netCDF4, pandas
+  numpy, netCDF4, cftime
 """
 
 import argparse
@@ -49,9 +49,9 @@ import sys
 import time as timer
 from pathlib import Path
 
+import cftime
 import netCDF4 as nc
 import numpy as np
-import pandas as pd
 
 import nc_metadata
 
@@ -101,10 +101,11 @@ def parse_args():
 
 def read_hourly_year(path, var_name):
     ds = nc.Dataset(str(path), 'r')
+    calendar = nc_metadata.read_calendar(ds, 'time')
     times = nc_metadata.read_times(ds, 'time')
-    data = np.array(ds.variables[var_name][:, :], dtype=np.float64)
+    data = np.array(ds.variables[var_name][:, :], dtype=np.float64).T
     ds.close()
-    return times, data
+    return times, data, calendar
 
 
 def read_node_metadata(path):
@@ -205,7 +206,8 @@ def finalize(info):
 # Output
 # ---------------------------------------------------------------------------
 
-def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
+def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted,
+                      calendar):
     var_def = nc_metadata.VARIABLES[variable_key]
     n_nodes = len(node['node_index'])
     n_time = len(months)
@@ -244,12 +246,13 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
     v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
+    v.calendar = calendar
     v.axis = 'T'
     v.long_name = 'Start of calendar month'
-    v[:] = [nc.date2num(pd.Timestamp(year=m['year'], month=m['month'], day=1)
-                        .to_pydatetime(), nc_metadata.TIME_UNITS, 'standard')
-            for m in months]
+    v[:] = nc.date2num(
+        [cftime.datetime(m['year'], m['month'], 1, calendar=calendar)
+         for m in months],
+        nc_metadata.TIME_UNITS, calendar)
 
     v = ds.createVariable('year', 'i2', ('time',))
     v.long_name = 'Calendar year'
@@ -259,12 +262,12 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v.long_name = 'Calendar month (1-12)'
     v[:] = [m['month'] for m in months]
 
-    max_arr = np.stack([m['max_val'] for m in months], axis=1)  # (node, time)
+    max_arr = np.stack([m['max_val'] for m in months], axis=0)  # (time, node)
     max_arr = np.where(np.isnan(max_arr), CF_FILL_F32, max_arr).astype(np.float32)
 
-    v = ds.createVariable(var_def['name'], 'f4', ('node', 'time'),
+    v = ds.createVariable(var_def['name'], 'f4', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 120)),
+                          chunksizes=(min(n_time, 120), n_nodes),
                           fill_value=CF_FILL_F32)
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
@@ -277,21 +280,21 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
     v.grid_mapping = 'crs'
     v[:] = max_arr
 
-    time_arr = np.stack([m['max_time_hours'] for m in months], axis=1)
+    time_arr = np.stack([m['max_time_hours'] for m in months], axis=0)
     time_arr = np.where(np.isnan(time_arr), CF_FILL_F32, time_arr)
-    v = ds.createVariable(f'{var_def["name"]}_time', 'f8', ('node', 'time'),
+    v = ds.createVariable(f'{var_def["name"]}_time', 'f8', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 120)),
+                          chunksizes=(min(n_time, 120), n_nodes),
                           fill_value=CF_FILL_F32)
     v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
+    v.calendar = calendar
     v.long_name = f'Time of the retained monthly maximum {var_def["name"]}'
     v[:] = time_arr
 
-    adj_arr = np.stack([m['adjusted'] for m in months], axis=1).astype('i1')
-    v = ds.createVariable(f'{var_def["name"]}_adjusted', 'i1', ('node', 'time'),
+    adj_arr = np.stack([m['adjusted'] for m in months], axis=0).astype('i1')
+    v = ds.createVariable(f'{var_def["name"]}_adjusted', 'i1', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 120)))
+                          chunksizes=(min(n_time, 120), n_nodes))
     v.long_name = (f'1 if this node/month\'s maximum was recomputed due to '
                    f'a <{MIN_SEPARATION_HOURS:.0f}h separation conflict '
                    f'with a neighboring month, else 0')
@@ -307,7 +310,7 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted):
         positive='down',
         crs=metadata.get('geospatial_bounds_crs', 'EPSG:4326'),
         vertical_crs=metadata.get('geospatial_bounds_vertical_crs', ''))
-    valid_times = [pd.Timestamp(year=m['year'], month=m['month'], day=1)
+    valid_times = [cftime.datetime(m['year'], m['month'], 1, calendar=calendar)
                    for m in months]
     nc_metadata.update_time_coverage(ds, valid_times)
     ds.close()
@@ -359,13 +362,14 @@ def main():
 
     for year, path in year_files:
         print(f'\nReading {path} ...')
-        times, data = read_hourly_year(path, var_name)
-        time_hours_all = (times - nc_metadata.EPOCH).total_seconds().values / 3600.0
+        times, data, calendar = read_hourly_year(path, var_name)
+        time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
+        months_key = nc_metadata.month_start(times, calendar)
 
-        for month in sorted(times.month.unique()):
-            mask = times.month == month
-            cur = compute_month_info(year, month, data[:, mask],
-                                     time_hours_all[mask])
+        for month_val in sorted(np.unique(months_key)):
+            mask = months_key == month_val
+            cur = compute_month_info(month_val.year, month_val.month,
+                                     data[:, mask], time_hours_all[mask])
             if prev is not None:
                 total_adjusted += resolve_adjacency(prev, cur)
                 finalized.append(finalize(prev))
@@ -381,7 +385,7 @@ def main():
           f'adjusted for the {MIN_SEPARATION_HOURS:.0f}h separation rule.')
 
     write_monthly_max(out_path, node, metadata, args.variable, finalized,
-                      total_adjusted)
+                      total_adjusted, calendar)
 
 
 if __name__ == '__main__':
