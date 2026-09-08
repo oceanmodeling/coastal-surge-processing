@@ -26,7 +26,7 @@ Usage:
       --output-dir /path/to/daily_max/
 
 Dependencies:
-  numpy, netCDF4, pandas
+  numpy, netCDF4, cftime
 """
 
 import argparse
@@ -36,7 +36,6 @@ from pathlib import Path
 
 import netCDF4 as nc
 import numpy as np
-import pandas as pd
 
 import nc_metadata
 
@@ -83,10 +82,11 @@ def parse_args():
 
 def read_hourly_year(path, var_name):
     ds = nc.Dataset(str(path), 'r')
+    calendar = nc_metadata.read_calendar(ds, 'time')
     times = nc_metadata.read_times(ds, 'time')
-    data = np.array(ds.variables[var_name][:, :], dtype=np.float64)
+    data = np.array(ds.variables[var_name][:, :], dtype=np.float64).T
     ds.close()
-    return times, data
+    return times, data, calendar
 
 
 def read_node_metadata(path):
@@ -102,7 +102,7 @@ def read_node_metadata(path):
 
 def compute_day_max(date, day_data, day_time_hours):
     """
-    date : datetime.date
+    date : cftime.datetime (see nc_metadata.day_start)
     day_data : (n_nodes, n_hours) float64, CF_FILL_F32 for invalid/dry
     day_time_hours : (n_hours,) float64, hours since nc_metadata.EPOCH
 
@@ -129,7 +129,7 @@ def compute_day_max(date, day_data, day_time_hours):
 # Output
 # ---------------------------------------------------------------------------
 
-def write_daily_max(path, node, metadata, variable_key, days):
+def write_daily_max(path, node, metadata, variable_key, days, calendar):
     var_def = nc_metadata.VARIABLES[variable_key]
     n_nodes = len(node['node_index'])
     n_time = len(days)
@@ -161,12 +161,11 @@ def write_daily_max(path, node, metadata, variable_key, days):
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
     v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
+    v.calendar = calendar
     v.axis = 'T'
     v.long_name = 'Start of calendar day'
-    v[:] = [nc.date2num(pd.Timestamp(d['date']).to_pydatetime(),
-                        nc_metadata.TIME_UNITS, 'standard')
-            for d in days]
+    v[:] = nc.date2num([d['date'] for d in days], nc_metadata.TIME_UNITS,
+                       calendar)
 
     v = ds.createVariable('year', 'i2', ('time',))
     v.long_name = 'Calendar year'
@@ -180,12 +179,12 @@ def write_daily_max(path, node, metadata, variable_key, days):
     v.long_name = 'Calendar day of month (1-31)'
     v[:] = [d['date'].day for d in days]
 
-    max_arr = np.stack([d['max_val'] for d in days], axis=1)  # (node, time)
+    max_arr = np.stack([d['max_val'] for d in days], axis=0)  # (time, node)
     max_arr = np.where(np.isnan(max_arr), CF_FILL_F32, max_arr).astype(np.float32)
 
-    v = ds.createVariable(var_def['name'], 'f4', ('node', 'time'),
+    v = ds.createVariable(var_def['name'], 'f4', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 366)),
+                          chunksizes=(min(n_time, 366), n_nodes),
                           fill_value=CF_FILL_F32)
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
@@ -198,14 +197,14 @@ def write_daily_max(path, node, metadata, variable_key, days):
     v.grid_mapping = 'crs'
     v[:] = max_arr
 
-    time_arr = np.stack([d['max_time_hours'] for d in days], axis=1)
+    time_arr = np.stack([d['max_time_hours'] for d in days], axis=0)
     time_arr = np.where(np.isnan(time_arr), CF_FILL_F32, time_arr)
-    v = ds.createVariable(f'{var_def["name"]}_time', 'f8', ('node', 'time'),
+    v = ds.createVariable(f'{var_def["name"]}_time', 'f8', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_time, 366)),
+                          chunksizes=(min(n_time, 366), n_nodes),
                           fill_value=CF_FILL_F32)
     v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
+    v.calendar = calendar
     v.long_name = f'Time of the retained daily maximum {var_def["name"]}'
     v[:] = time_arr
 
@@ -217,7 +216,7 @@ def write_daily_max(path, node, metadata, variable_key, days):
         positive='down',
         crs=metadata.get('geospatial_bounds_crs', 'EPSG:4326'),
         vertical_crs=metadata.get('geospatial_bounds_vertical_crs', ''))
-    valid_times = [pd.Timestamp(d['date']) for d in days]
+    valid_times = [d['date'] for d in days]
     nc_metadata.update_time_coverage(ds, valid_times)
     ds.close()
     print(f'Wrote {out}  ({n_time} days)')
@@ -265,9 +264,9 @@ def main():
 
     for year, path in year_files:
         print(f'\nReading {path} ...')
-        times, data = read_hourly_year(path, var_name)
-        time_hours_all = (times - nc_metadata.EPOCH).total_seconds().values / 3600.0
-        dates = times.date
+        times, data, calendar = read_hourly_year(path, var_name)
+        time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
+        dates = nc_metadata.day_start(times, calendar)
 
         for date in sorted(np.unique(dates)):
             mask = dates == date
@@ -279,7 +278,7 @@ def main():
 
     print(f'\n{len(days)} total day(s).')
 
-    write_daily_max(out_path, node, metadata, args.variable, days)
+    write_daily_max(out_path, node, metadata, args.variable, days, calendar)
 
 
 if __name__ == '__main__':
