@@ -103,7 +103,7 @@ def read_hourly_year(path, var_name):
     ds = nc.Dataset(str(path), 'r')
     calendar = nc_metadata.read_calendar(ds, 'time')
     times = nc_metadata.read_times(ds, 'time')
-    data = np.array(ds.variables[var_name][:, :], dtype=np.float64).T
+    data = nc_metadata.read_node_major_variable(ds, var_name)
     ds.close()
     return times, data, calendar
 

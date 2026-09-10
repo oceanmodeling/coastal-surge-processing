@@ -109,3 +109,55 @@ def test_read_times_standard_calendar_still_returns_datetimeindex(tmp_path):
     times = nc_metadata.read_times(ds, 'time')
     ds.close()
     assert isinstance(times, pd.DatetimeIndex)
+
+
+def _write_2d_var(path, dims, shape):
+    ds = nc.Dataset(path, 'w')
+    ds.createDimension('time', shape[dims.index('time')])
+    ds.createDimension('node', shape[dims.index('node')])
+    v = ds.createVariable('twl', 'f4', dims)
+    v[:] = np.arange(np.prod(shape)).reshape(shape)
+    ds.close()
+
+
+def test_read_node_major_variable_transposes_time_node_order(tmp_path):
+    path = tmp_path / 'time_node.nc'
+    on_disk = np.arange(15).reshape(5, 3)  # (time, node)
+    _write_2d_var(path, ('time', 'node'), (5, 3))
+    ds = nc.Dataset(path, 'r')
+    data = nc_metadata.read_node_major_variable(ds, 'twl')
+    ds.close()
+    assert data.shape == (3, 5)
+    np.testing.assert_array_equal(data, on_disk.T)
+
+
+def test_read_node_major_variable_leaves_node_time_order_as_is(tmp_path):
+    """A file written by a pre-fix version of this pipeline, using the
+    opposite on-disk convention, must not be silently transposed."""
+    path = tmp_path / 'node_time.nc'
+    expected = np.arange(15).reshape(3, 5)
+    _write_2d_var(path, ('node', 'time'), (3, 5))
+    ds = nc.Dataset(path, 'r')
+    data = nc_metadata.read_node_major_variable(ds, 'twl')
+    ds.close()
+    assert data.shape == (3, 5)
+    np.testing.assert_array_equal(data, expected)
+
+
+def test_read_node_major_variable_rejects_unrecognized_dims(tmp_path):
+    path = tmp_path / 'other.nc'
+    ds = nc.Dataset(path, 'w')
+    ds.createDimension('x', 3)
+    ds.createDimension('y', 5)
+    v = ds.createVariable('twl', 'f4', ('x', 'y'))
+    v[:] = np.zeros((3, 5))
+    ds.close()
+
+    ds = nc.Dataset(path, 'r')
+    try:
+        nc_metadata.read_node_major_variable(ds, 'twl')
+        assert False, 'expected a ValueError for unrecognized dimensions'
+    except ValueError as e:
+        assert 'twl' in str(e)
+    finally:
+        ds.close()

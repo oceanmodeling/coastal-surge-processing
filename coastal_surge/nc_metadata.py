@@ -666,6 +666,40 @@ def write_times(ds, varname, times):
     return nc.date2num(times.to_pydatetime(), var.units, calendar)
 
 
+def read_node_major_variable(ds, var_name, dtype=np.float64):
+    """
+    Read a pipeline data variable (twl, ssgh, ...) and return it as
+    (n_nodes, n_times), the convention every pipeline script's internal
+    computation uses -- regardless of which of the two on-disk dimension
+    orders this particular file actually uses.
+
+    Checks var.dimensions by name rather than assuming a position: a
+    ('time', 'node') file (the current on-disk convention, for cdo
+    compatibility) is transposed; a ('node', 'time') file (the convention
+    written by a pre-fix version of this pipeline) is used as-is. Any other
+    dimensions raise, rather than silently transposing the wrong way.
+
+    Parameters
+    ----------
+    ds : netCDF4.Dataset
+    var_name : str
+    dtype : numpy dtype
+
+    Returns
+    -------
+    ndarray (n_nodes, n_times)
+    """
+    var = ds.variables[var_name]
+    if var.dimensions == ('time', 'node'):
+        return np.array(var[:, :], dtype=dtype).T
+    if var.dimensions == ('node', 'time'):
+        return np.array(var[:, :], dtype=dtype)
+    raise ValueError(
+        f'{var_name!r} in {ds.filepath()!r} has dimensions '
+        f'{var.dimensions!r}, expected (\'time\', \'node\') or '
+        f'(\'node\', \'time\').')
+
+
 def hours_since_epoch(times, calendar):
     """
     Elapsed hours since nc_metadata.EPOCH for `times` (a read_times()
