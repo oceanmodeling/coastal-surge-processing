@@ -256,12 +256,36 @@ def load_checkpoint(ckpt_path):
 # ---------------------------------------------------------------------------
 
 def read_hourly_year(path, var_name):
-    """Read one year's hourly file in full: times, data (n_nodes, n_times)."""
+    """Read one year's hourly file in full: times, data (n_nodes, n_times).
+
+    Requires a standard-family calendar (see nc_metadata.STANDARD_CALENDARS):
+    the tidal harmonic fit needs true astronomical elapsed time to be
+    physically meaningful, and a non-standard calendar (e.g. 360_day) drifts
+    from real elapsed time by several days/year, which would silently
+    corrupt a multi-year fit. If your source campaign uses a non-standard
+    calendar, relabel/convert its time axis to a standard calendar before
+    running this step (as is already done for the tidal constituents
+    themselves, which are defined in real astronomical time), then restore
+    the original calendar afterward -- see the "360_day" discussion in the
+    project issue tracker. Steps 1/3/4 (extraction, daily/monthly max) don't
+    have this constraint and can run directly against a native non-standard
+    calendar.
+    """
     ds = nc.Dataset(str(path), 'r')
+    calendar = nc_metadata.read_calendar(ds, 'time')
+    if calendar not in nc_metadata.STANDARD_CALENDARS:
+        ds.close()
+        raise ValueError(
+            f'{path}: calendar {calendar!r} is not a standard-family '
+            f'calendar (expected one of {sorted(nc_metadata.STANDARD_CALENDARS)}). '
+            f'detide_surge.py requires real astronomical time for the tidal '
+            f'harmonic fit -- relabel/convert this campaign\'s time axis to '
+            f'a standard calendar before detiding, then restore the '
+            f'original calendar on the ssgh output afterward.')
     times = nc_metadata.read_times(ds, 'time')
-    data = np.array(ds.variables[var_name][:, :], dtype=np.float64)
+    data = nc_metadata.read_node_major_variable(ds, var_name)
     ds.close()
-    return times, data
+    return times, data, calendar
 
 
 def read_node_metadata(path):
@@ -271,7 +295,8 @@ def read_node_metadata(path):
     return node
 
 
-def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
+def write_ssgh_year(path, node, metadata, times, surge_data, constituents,
+                    calendar):
     """Write one year of hourly ssgh data (n_nodes, n_times) to `path`."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -308,13 +333,13 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
     v = ds.createVariable('time', 'f8', ('time',))
     v.standard_name = 'time'
     v.units = nc_metadata.TIME_UNITS
-    v.calendar = 'standard'
+    v.calendar = calendar
     v.axis = 'T'
     v[:] = nc_metadata.write_times(ds, 'time', times)
 
-    v = ds.createVariable(var_def['name'], 'f4', ('node', 'time'),
+    v = ds.createVariable(var_def['name'], 'f4', ('time', 'node'),
                           zlib=True, complevel=1,
-                          chunksizes=(n_nodes, min(n_times, 24)),
+                          chunksizes=(min(n_times, 24), n_nodes),
                           fill_value=CF_FILL_F32)
     v.standard_name = var_def['standard_name']
     v.long_name = var_def['long_name']
@@ -328,7 +353,7 @@ def write_ssgh_year(path, node, metadata, times, surge_data, constituents):
     chunk = 10000
     for i in range(0, n_nodes, chunk):
         j = min(i + chunk, n_nodes)
-        v[i:j, :] = surge_data[i:j, :]
+        v[:, i:j] = surge_data[i:j, :].T
 
     nc_metadata.write_node_block(ds, node['model_name'], node,
                                  point_set_source=point_set_source)
@@ -356,10 +381,10 @@ def run_phase1(year_files, output_dir):
     ckpt_path = checkpoint_path(output_dir)
     all_years = [y for y, _ in year_files]
 
-    first_times, _ = read_hourly_year(year_files[0][1],
-                                      nc_metadata.VARIABLES[IN_VARIABLE_KEY]['name'])
-    last_times, _  = read_hourly_year(year_files[-1][1],
-                                      nc_metadata.VARIABLES[IN_VARIABLE_KEY]['name'])
+    first_times, _, _ = read_hourly_year(year_files[0][1],
+                                         nc_metadata.VARIABLES[IN_VARIABLE_KEY]['name'])
+    last_times, _, _  = read_hourly_year(year_files[-1][1],
+                                         nc_metadata.VARIABLES[IN_VARIABLE_KEY]['name'])
 
     global_t0     = first_times[0].to_pydatetime()
     global_t0_iso = global_t0.isoformat()
@@ -402,7 +427,7 @@ def run_phase1(year_files, output_dir):
         print(f'\n--- Phase 1: Year {year} [{i+1}/{len(year_files)}] ---')
         t0_wall = timer.time()
 
-        times, data = read_hourly_year(
+        times, data, _ = read_hourly_year(
             path, nc_metadata.VARIABLES[IN_VARIABLE_KEY]['name'])
         if n_nodes is None:
             n_nodes = data.shape[0]
@@ -462,7 +487,7 @@ def run_phase2(year_files, C, global_t0, constituents, total_hours,
         print(f'Phase 2: Year {year} [{i+1}/{len(todo)}]')
         print(f'{"="*60}')
 
-        times, data = read_hourly_year(
+        times, data, calendar = read_hourly_year(
             in_path, nc_metadata.VARIABLES[IN_VARIABLE_KEY]['name'])
         node = read_node_metadata(in_path)
 
@@ -477,7 +502,7 @@ def run_phase2(year_files, C, global_t0, constituents, total_hours,
         surge_data = surge.T.astype(np.float32)      # (n_nodes, n_times)
 
         write_ssgh_year(out_path, node, metadata, times, surge_data,
-                        constituents)
+                        constituents, calendar)
 
         elapsed = timer.time() - total_t0
         print(f'  Year {year} done. Cumulative: {elapsed:.0f}s')

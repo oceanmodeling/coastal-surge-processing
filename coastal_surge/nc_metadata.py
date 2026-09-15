@@ -17,9 +17,10 @@ from a static YAML file or be copied from an input file.
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import cftime
 import netCDF4 as nc
 import numpy as np
 import pandas as pd
@@ -30,6 +31,12 @@ import yaml
 # time don't produce negative time values.
 EPOCH = pd.Timestamp('1900-01-01')
 TIME_UNITS = 'hours since 1900-01-01 00:00:00'
+
+# Calendars whose dates are all representable as pandas.Timestamp (proleptic
+# Gregorian). Anything else (360_day, noleap/365_day, all_leap/366_day,
+# julian, ...) can contain dates pandas can't represent (e.g. 360_day's
+# Feb 30) -- see read_times()/day_start()/month_start().
+STANDARD_CALENDARS = {'standard', 'gregorian', 'proleptic_gregorian'}
 
 # Fallback values used for any field not present in the user's YAML file.
 DEFAULTS = {
@@ -585,12 +592,27 @@ def set_geospatial_extent(ds, lon, lat, depth=None, positive='down',
             ds.geospatial_bounds_vertical_crs = vertical_crs
 
 
+def read_calendar(ds, varname='time'):
+    """Return the `calendar` attribute of a time variable, defaulting to
+    'standard' for files that don't declare one."""
+    return getattr(ds.variables[varname], 'calendar', 'standard')
+
+
 def read_times(ds, varname='time'):
     """
     Read a time variable as real timestamps, using whatever `units` and
     `calendar` it actually declares — not an assumed epoch. This matters
     for files written before the pipeline's reference epoch changed, or any
     file that otherwise uses a different "<units> since <epoch>" string.
+
+    For a non-standard calendar (360_day, noleap/365_day, all_leap/366_day,
+    julian, ...), the cftime.datetime representation is returned as-is
+    instead of being forced through pandas.Timestamp: those calendars can
+    contain dates that don't exist in pandas' proleptic-Gregorian Timestamp
+    (e.g. 360_day's Feb 30), which would raise. Callers that need
+    calendar-aware year/month/day grouping (rather than elapsed-time
+    arithmetic) should use day_start()/month_start(), which accept either
+    return type.
 
     Parameters
     ----------
@@ -599,11 +621,14 @@ def read_times(ds, varname='time'):
 
     Returns
     -------
-    pandas.DatetimeIndex
+    pandas.DatetimeIndex for a standard-family calendar (see
+    STANDARD_CALENDARS), otherwise an ndarray of cftime.datetime objects.
     """
     var = ds.variables[varname]
-    calendar = getattr(var, 'calendar', 'standard')
+    calendar = read_calendar(ds, varname)
     cftime_dates = nc.num2date(var[:], var.units, calendar)
+    if calendar not in STANDARD_CALENDARS:
+        return np.atleast_1d(np.array(cftime_dates, dtype=object))
     try:
         return pd.to_datetime([d.isoformat() for d in cftime_dates])
     except Exception:
@@ -622,7 +647,9 @@ def write_times(ds, varname, times):
     ----------
     ds : netCDF4.Dataset
     varname : str
-    times : pandas.DatetimeIndex or sequence of datetime-like
+    times : pandas.DatetimeIndex, sequence of datetime-like, or an ndarray
+        of cftime.datetime objects (as returned by read_times()/day_start()/
+        month_start() for a non-standard calendar)
 
     Returns
     -------
@@ -630,8 +657,129 @@ def write_times(ds, varname, times):
     """
     var = ds.variables[varname]
     calendar = getattr(var, 'calendar', 'standard')
+    if isinstance(times, np.ndarray) and times.dtype == object:
+        # Already cftime.datetime objects -- these can't all round-trip
+        # through pandas.DatetimeIndex (e.g. a 360_day Feb 30), so hand them
+        # to nc.date2num directly.
+        return nc.date2num(times, var.units, calendar)
     times = pd.DatetimeIndex(times)
     return nc.date2num(times.to_pydatetime(), var.units, calendar)
+
+
+def read_node_major_variable(ds, var_name, dtype=np.float64):
+    """
+    Read a pipeline data variable (twl, ssgh, ...) and return it as
+    (n_nodes, n_times), the convention every pipeline script's internal
+    computation uses -- regardless of which of the two on-disk dimension
+    orders this particular file actually uses.
+
+    Checks var.dimensions by name rather than assuming a position: a
+    ('time', 'node') file (the current on-disk convention, for cdo
+    compatibility) is transposed; a ('node', 'time') file (the convention
+    written by a pre-fix version of this pipeline) is used as-is. Any other
+    dimensions raise, rather than silently transposing the wrong way.
+
+    Parameters
+    ----------
+    ds : netCDF4.Dataset
+    var_name : str
+    dtype : numpy dtype
+
+    Returns
+    -------
+    ndarray (n_nodes, n_times)
+    """
+    var = ds.variables[var_name]
+    if var.dimensions == ('time', 'node'):
+        return np.array(var[:, :], dtype=dtype).T
+    if var.dimensions == ('node', 'time'):
+        return np.array(var[:, :], dtype=dtype)
+    raise ValueError(
+        f'{var_name!r} in {ds.filepath()!r} has dimensions '
+        f'{var.dimensions!r}, expected (\'time\', \'node\') or '
+        f'(\'node\', \'time\').')
+
+
+def hours_since_epoch(times, calendar):
+    """
+    Elapsed hours since nc_metadata.EPOCH for `times` (a read_times()
+    result), calendar-aware. Equivalent to what write_times() computes
+    against an already-created variable, but usable before any output
+    variable exists (e.g. per-timestep bookkeeping during a streaming pass).
+    Deliberately calendar-aware rather than a plain
+    `(times - EPOCH).total_seconds()`, which would silently assume standard
+    calendar day lengths even for a 360_day/noleap source.
+    """
+    if isinstance(times, pd.DatetimeIndex):
+        times = times.to_pydatetime()
+    return nc.date2num(times, TIME_UNITS, calendar)
+
+
+def _year_month_day(times):
+    """
+    Vectorized (year, month, day) extraction from either a
+    pandas.DatetimeIndex or an ndarray of cftime.datetime objects (the two
+    return types of read_times()).
+    """
+    if isinstance(times, pd.DatetimeIndex):
+        return times.year.values, times.month.values, times.day.values
+    times = np.asarray(times)
+    years = np.fromiter((t.year for t in times), dtype=np.int64, count=len(times))
+    months = np.fromiter((t.month for t in times), dtype=np.int64, count=len(times))
+    days = np.fromiter((t.day for t in times), dtype=np.int64, count=len(times))
+    return years, months, days
+
+
+def _calendar_period_start(times, calendar, day_precision, epsilon):
+    """Shared implementation of day_start()/month_start(); see those for the
+    rationale behind the epsilon shift."""
+    shifted = times - epsilon
+    years, months, days = _year_month_day(shifted)
+    if not day_precision:
+        days = np.ones_like(days)
+    return np.array(
+        [cftime.datetime(int(y), int(m), int(d), calendar=calendar)
+         for y, m, d in zip(years, months, days)],
+        dtype=object)
+
+
+def day_start(times, calendar, epsilon=timedelta(seconds=1)):
+    """
+    For each timestamp in `times` (a read_times() result), return the
+    calendar day it belongs to, as a cftime.datetime at day precision.
+    Usable both as a grouping key (equality/np.unique across the returned
+    array) and, directly, as the value passed to nc.date2num()/write_times()
+    for the corresponding output time coordinate.
+
+    Every hourly value in this pipeline represents the interval
+    (t - 1 step, t], not the instant t. Subtracting a small epsilon before
+    reading off the calendar date accounts for that: it only changes the
+    result for a timestamp landing exactly at 00:00:00, which is exactly the
+    per-year ADCIRC file convention (first output one step after cold start,
+    last output landing exactly on next year's Jan 1 00:00:00) -- without
+    this shift, that one hour spills into a spurious extra calendar day (see
+    compute_daily_max.py giving 366 days for a non-leap year) and, in a
+    360_day campaign, can misattribute a value to the wrong month as well.
+
+    Parameters
+    ----------
+    times : pandas.DatetimeIndex or ndarray of cftime.datetime
+    calendar : str
+    epsilon : datetime.timedelta
+
+    Returns
+    -------
+    ndarray of cftime.datetime, same length as `times`
+    """
+    return _calendar_period_start(times, calendar, day_precision=True,
+                                  epsilon=epsilon)
+
+
+def month_start(times, calendar, epsilon=timedelta(seconds=1)):
+    """Same as day_start(), but grouped at month (not day) precision, for
+    compute_monthly_max.py."""
+    return _calendar_period_start(times, calendar, day_precision=False,
+                                  epsilon=epsilon)
 
 
 def update_time_coverage(ds, times):
