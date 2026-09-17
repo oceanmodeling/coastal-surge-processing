@@ -70,6 +70,32 @@ since SurgeMIP isn't a registered CMIP6 activity.
 | WaterLevel | `twl` | `total_water_level` | Mean sea level + astronomical tide + meteorologically-driven (storm surge) contributions; see file metadata for model-specific contributions. |
 | StormSurge | `ssgh` | `storm_surge_height` | Non-tidal residual of `twl`. Preference is to subtract an astronomical-tide-only model run where available; `detide_surge.py` implements the harmonic-analysis fallback (EXTENDED constituent set minus Sa/Ssa — see [Detiding](#detiding) below). |
 
+### Time-stamping convention
+
+Block maxima need to know whether a timestamp landing exactly on a period
+boundary belongs to the period that just ended or the one that begins. That
+depends on how the source series is stamped, so it is stated rather than
+assumed:
+
+| `--time-stamp-convention` | Meaning | Typical source |
+|---|---|---|
+| `end` (default) | each value covers `(t - 1 step, t]`, so `YYYY-MM-01 00:00` belongs to the month that just ended | ADCIRC per-year output: first record one step after cold start, last landing on the next year's Jan 1 00:00 |
+| `instant` | each value is a sample *at* `t`, so a boundary timestamp belongs to the period that begins | a reanalysis sampled on the hour, e.g. per-year files running `YYYY-01-01 00:00` to `YYYY-12-31 23:00` |
+
+The flag is accepted by `extract_outputs_to_shoreline_pts.py`,
+`compute_daily_max.py` and `compute_monthly_max.py`, and the resolved value is
+written to every output as the `time_stamp_convention` global attribute, so
+later steps inherit it automatically. Precedence is the usual one: built-in
+default, then the input file's attribute, then `--metadata-yaml`, then the
+flag.
+
+Choosing wrongly is otherwise silent. Applying `end` to an instantaneous
+series moves every midnight value into the previous day and, on per-year
+input, re-opens the previous December — yielding one duplicate output period
+per file boundary plus a phantom leading period. `compute_daily_max.py` and
+`compute_monthly_max.py` now detect duplicated periods and fail with a message
+naming the other convention, rather than writing the duplicates.
+
 ### Detiding
 
 Sa and Ssa are excluded from the harmonic tidal fit used to compute

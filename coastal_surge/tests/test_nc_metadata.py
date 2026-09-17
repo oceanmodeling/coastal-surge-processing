@@ -1,7 +1,10 @@
+from datetime import timedelta
+
 import cftime
 import netCDF4 as nc
 import numpy as np
 import pandas as pd
+import pytest
 
 import nc_metadata
 
@@ -161,3 +164,89 @@ def test_read_node_major_variable_rejects_unrecognized_dims(tmp_path):
         assert 'twl' in str(e)
     finally:
         ds.close()
+
+
+# ---------------------------------------------------------------------------
+# Time-stamping convention
+# ---------------------------------------------------------------------------
+
+def test_convention_epsilon_end_shifts_and_instant_does_not():
+    assert nc_metadata.convention_epsilon('end') == timedelta(seconds=1)
+    assert nc_metadata.convention_epsilon('instant') == timedelta(0)
+    assert nc_metadata.convention_epsilon(None) == \
+        nc_metadata.convention_epsilon(nc_metadata.DEFAULT_TIME_STAMP_CONVENTION)
+
+
+def test_convention_epsilon_rejects_unknown():
+    with pytest.raises(ValueError, match='Unknown time-stamping convention'):
+        nc_metadata.convention_epsilon('middle')
+
+
+def test_instant_convention_keeps_midnight_in_its_own_day():
+    """The whole point of the flag: an instantaneous sample at midnight
+    belongs to the day that begins, not the one that ended."""
+    times = pd.to_datetime(['2000-03-01 00:00', '2000-03-01 01:00'])
+    end = nc_metadata.day_start(times, 'standard', convention='end')
+    inst = nc_metadata.day_start(times, 'standard', convention='instant')
+    assert (end[0].year, end[0].month, end[0].day) == (2000, 2, 29)
+    assert (inst[0].year, inst[0].month, inst[0].day) == (2000, 3, 1)
+    assert (end[1].day, inst[1].day) == (1, 1)
+
+
+def test_instant_convention_keeps_month_boundary_in_its_own_month():
+    times = pd.to_datetime(['2001-01-01 00:00', '2001-01-01 05:00'])
+    end = nc_metadata.month_start(times, 'standard', convention='end')
+    inst = nc_metadata.month_start(times, 'standard', convention='instant')
+    assert (end[0].year, end[0].month) == (2000, 12)
+    assert (inst[0].year, inst[0].month) == (2001, 1)
+
+
+def test_explicit_epsilon_still_overrides_convention():
+    times = pd.to_datetime(['2000-03-01 00:00'])
+    got = nc_metadata.day_start(times, 'standard', convention='end',
+                                epsilon=timedelta(0))
+    assert (got[0].month, got[0].day) == (3, 1)
+
+
+def test_periods_are_unique_detects_a_reopened_period():
+    mk = lambda y, m, d: cftime.datetime(y, m, d, calendar='standard')
+    ok, dups = nc_metadata.periods_are_unique(
+        [mk(1979, 12, 1), mk(1980, 1, 1), mk(1979, 12, 1)])
+    assert not ok
+    assert [(d.year, d.month) for d in dups] == [(1979, 12)]
+    ok, dups = nc_metadata.periods_are_unique([mk(1979, 12, 1), mk(1980, 1, 1)])
+    assert ok and dups == []
+
+
+def test_raise_on_duplicate_periods_names_the_other_convention():
+    mk = lambda y, m, d: cftime.datetime(y, m, d, calendar='standard')
+    with pytest.raises(ValueError, match='--time-stamp-convention instant'):
+        nc_metadata.raise_on_duplicate_periods(
+            [mk(1979, 12, 1), mk(1979, 12, 1)], 'month', 'end')
+    nc_metadata.raise_on_duplicate_periods([mk(1979, 12, 1)], 'month', 'end')
+
+
+def test_resolve_time_stamp_convention_defaults_and_validates():
+    assert nc_metadata.resolve_time_stamp_convention({}) == \
+        nc_metadata.DEFAULT_TIME_STAMP_CONVENTION
+    assert nc_metadata.resolve_time_stamp_convention(
+        {'time_stamp_convention': 'instant'}) == 'instant'
+    with pytest.raises(ValueError):
+        nc_metadata.resolve_time_stamp_convention(
+            {'time_stamp_convention': 'nonsense'})
+
+
+def test_convention_round_trips_through_metadata_and_file(tmp_path):
+    """Set via CLI override -> written as a global attribute -> inherited."""
+    md = nc_metadata.load_metadata(
+        None, cli_overrides={'time_stamp_convention': 'instant',
+                             'group_name': 'G', 'climate_forcing': 'F',
+                             'scenario': 'S', 'location': 'GESLA'})
+    assert md['time_stamp_convention'] == 'instant'
+    path = tmp_path / 'x.nc'
+    ds = nc.Dataset(str(path), 'w', format='NETCDF4')
+    nc_metadata.set_global_attrs(ds, md, title='t', summary='s',
+                                 timestep='MonthlyMax',
+                                 variable_key='StormSurge')
+    ds.close()
+    assert nc_metadata.read_known_attrs(path)['time_stamp_convention'] == 'instant'

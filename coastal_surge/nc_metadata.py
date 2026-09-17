@@ -38,6 +38,43 @@ TIME_UNITS = 'hours since 1900-01-01 00:00:00'
 # Feb 30) -- see read_times()/day_start()/month_start().
 STANDARD_CALENDARS = {'standard', 'gregorian', 'proleptic_gregorian'}
 
+# How the input series stamps its values in time. This decides which calendar
+# period a timestamp landing exactly on a period boundary belongs to, and so
+# it must be stated rather than assumed -- getting it wrong is silent.
+#
+#   'end'     Each value represents the interval (t - 1 step, t], so a
+#             timestamp of exactly YYYY-MM-01 00:00:00 belongs to the month
+#             that just ended. This is the ADCIRC per-year output convention
+#             (first output one step after cold start, last landing exactly
+#             on the next year's Jan 1 00:00:00), and remains the default so
+#             that existing outputs stay reproducible.
+#   'instant' Each value is an instantaneous sample at t, so a boundary
+#             timestamp belongs to the period that begins. This is the usual
+#             convention for a reanalysis sampled on the hour, e.g. per-year
+#             files running YYYY-01-01 00:00 to YYYY-12-31 23:00.
+#
+# Applying 'end' to an instantaneous series moves every midnight value into
+# the previous day, and on per-year input re-opens the previous December,
+# producing one duplicate period per file boundary. day_start()/month_start()
+# select the shift; raise_on_duplicate_periods() catches the mistake.
+TIME_STAMP_CONVENTIONS = ('end', 'instant')
+DEFAULT_TIME_STAMP_CONVENTION = 'end'
+_CONVENTION_EPSILON = {
+    'end': timedelta(seconds=1),
+    'instant': timedelta(0),
+}
+
+
+def convention_epsilon(convention=None):
+    """Return the boundary shift implied by a time-stamping convention."""
+    if convention is None:
+        convention = DEFAULT_TIME_STAMP_CONVENTION
+    if convention not in _CONVENTION_EPSILON:
+        raise ValueError(
+            f'Unknown time-stamping convention {convention!r}, expected one '
+            f'of {list(TIME_STAMP_CONVENTIONS)}')
+    return _CONVENTION_EPSILON[convention]
+
 # Fallback values used for any field not present in the user's YAML file.
 DEFAULTS = {
     'id': 'SurgeMIP_shoreline_waterlevels',
@@ -91,6 +128,11 @@ DEFAULTS = {
     # SurgeMIP isn't a registered CMIP6 activity.
     'realm': 'ocean',
     'further_info_url': '',
+    # Time-stamping convention of the source series (see
+    # TIME_STAMP_CONVENTIONS). Written to every output so that downstream
+    # steps inherit it rather than re-assuming, and so a released file states
+    # how its block maxima were bucketed.
+    'time_stamp_convention': DEFAULT_TIME_STAMP_CONVENTION,
     # Short, filename-safe tokens used to build the SurgeMIP output filename
     # convention (see NAMING_FIELDS/build_filename below), and — via
     # set_global_attrs() — the CMIP6-style institution_id/source_id/
@@ -193,6 +235,7 @@ _ATTR_ORDER = [
     'license', 'institution', 'institution_id', 'further_info_url',
     'sea_name', 'source', 'source_id', 'forcing', 'experiment_id',
     'realm', 'product', 'frequency', 'table_id', 'variable_id', 'location',
+    'time_stamp_convention',
     'keywords', 'standard_name_vocabulary', 'references', 'comment',
 ]
 
@@ -343,13 +386,50 @@ def add_naming_args(parser):
 
 
 def naming_overrides_from_args(args):
-    """Extract the add_naming_args() flags from a parsed args namespace."""
-    return {
+    """
+    Extract the add_naming_args() flags from a parsed args namespace, plus
+    --time-stamp-convention when add_time_convention_arg() was used. Values
+    left as None are ignored by load_metadata(), so an unset flag falls
+    through to the YAML, then to whatever the input file declares, then to
+    DEFAULTS.
+    """
+    overrides = {
         'group_name': args.group_name,
         'climate_forcing': args.climate_forcing,
         'scenario': args.scenario,
         'location': args.location,
     }
+    if hasattr(args, 'time_stamp_convention'):
+        overrides['time_stamp_convention'] = args.time_stamp_convention
+    return overrides
+
+
+def add_time_convention_arg(parser):
+    """
+    Add the --time-stamp-convention flag. Left unset, the convention is
+    inherited from the input file's `time_stamp_convention` attribute, then
+    from --metadata-yaml, then from DEFAULT_TIME_STAMP_CONVENTION.
+    """
+    parser.add_argument(
+        '--time-stamp-convention', choices=list(TIME_STAMP_CONVENTIONS),
+        default=None,
+        help='How the input series stamps its values in time. "end" (the '
+             'default) treats each value as the interval (t - 1 step, t], so '
+             'a timestamp on a period boundary belongs to the period that '
+             'just ended -- the ADCIRC per-year convention. "instant" treats '
+             'each value as a sample at t, which is correct for a series '
+             'running e.g. YYYY-01-01 00:00 to YYYY-12-31 23:00. Choosing '
+             'wrongly shifts every midnight value by one period and produces '
+             'duplicate output periods at per-year file boundaries.',
+    )
+
+
+def resolve_time_stamp_convention(metadata):
+    """Validate and return metadata['time_stamp_convention']."""
+    convention = metadata.get('time_stamp_convention') or \
+        DEFAULT_TIME_STAMP_CONVENTION
+    convention_epsilon(convention)   # validates, raises on an unknown value
+    return convention
 
 
 def _format_time_range(year_or_range):
@@ -743,7 +823,7 @@ def _calendar_period_start(times, calendar, day_precision, epsilon):
         dtype=object)
 
 
-def day_start(times, calendar, epsilon=timedelta(seconds=1)):
+def day_start(times, calendar, convention=None, epsilon=None):
     """
     For each timestamp in `times` (a read_times() result), return the
     calendar day it belongs to, as a cftime.datetime at day precision.
@@ -751,35 +831,83 @@ def day_start(times, calendar, epsilon=timedelta(seconds=1)):
     array) and, directly, as the value passed to nc.date2num()/write_times()
     for the corresponding output time coordinate.
 
-    Every hourly value in this pipeline represents the interval
-    (t - 1 step, t], not the instant t. Subtracting a small epsilon before
-    reading off the calendar date accounts for that: it only changes the
-    result for a timestamp landing exactly at 00:00:00, which is exactly the
-    per-year ADCIRC file convention (first output one step after cold start,
-    last output landing exactly on next year's Jan 1 00:00:00) -- without
-    this shift, that one hour spills into a spurious extra calendar day (see
-    compute_daily_max.py giving 366 days for a non-leap year) and, in a
-    360_day campaign, can misattribute a value to the wrong month as well.
+    Whether a timestamp landing exactly on a period boundary belongs to the
+    period that just ended or the one that begins depends on how the source
+    series is stamped -- see TIME_STAMP_CONVENTIONS. For the default
+    'end' convention a small epsilon is subtracted before reading off the
+    calendar date; for 'instant' no shift is applied. Getting this wrong is
+    silent and costly: an 'end' shift on an instantaneous series moves every
+    midnight value into the previous day, which on a per-year input also
+    re-opens the previous December and yields duplicate output periods (see
+    periods_are_unique()).
 
     Parameters
     ----------
     times : pandas.DatetimeIndex or ndarray of cftime.datetime
     calendar : str
-    epsilon : datetime.timedelta
+    convention : str or None
+        One of TIME_STAMP_CONVENTIONS. None selects
+        DEFAULT_TIME_STAMP_CONVENTION.
+    epsilon : datetime.timedelta or None
+        Explicit override of the shift implied by `convention`, for tests.
 
     Returns
     -------
     ndarray of cftime.datetime, same length as `times`
     """
+    if epsilon is None:
+        epsilon = convention_epsilon(convention)
     return _calendar_period_start(times, calendar, day_precision=True,
                                   epsilon=epsilon)
 
 
-def month_start(times, calendar, epsilon=timedelta(seconds=1)):
+def month_start(times, calendar, convention=None, epsilon=None):
     """Same as day_start(), but grouped at month (not day) precision, for
     compute_monthly_max.py."""
+    if epsilon is None:
+        epsilon = convention_epsilon(convention)
     return _calendar_period_start(times, calendar, day_precision=False,
                                   epsilon=epsilon)
+
+
+def periods_are_unique(periods):
+    """
+    Return (ok, duplicates) for a sequence of period keys produced by
+    day_start()/month_start() and then finalized in streaming order.
+
+    A duplicate means the same calendar day/month was finalized twice, which
+    happens when the time-stamping convention is wrong for the input: an
+    'end' shift applied to an instantaneous per-year series pushes each
+    year's first timestep back into the previous December, re-opening a
+    period the streaming pass had already closed. Callers should treat this
+    as an error rather than emit duplicated records.
+    """
+    seen, dups = set(), []
+    for p in periods:
+        key = (p.year, p.month, p.day)
+        if key in seen:
+            dups.append(p)
+        seen.add(key)
+    return (not dups), dups
+
+
+def raise_on_duplicate_periods(periods, label, convention):
+    """Raise a ValueError naming the likely cause if any period repeats."""
+    ok, dups = periods_are_unique(periods)
+    if ok:
+        return
+    shown = ', '.join(str(d) for d in dups[:5])
+    more = f' (and {len(dups) - 5} more)' if len(dups) > 5 else ''
+    other = 'instant' if (convention or DEFAULT_TIME_STAMP_CONVENTION) == 'end' else 'end'
+    raise ValueError(
+        f'{len(dups)} duplicate {label}(s) were finalized: {shown}{more}. '
+        f'This almost always means --time-stamp-convention is wrong for this '
+        f'input: it is set to '
+        f'{convention or DEFAULT_TIME_STAMP_CONVENTION!r}, and the number of '
+        f'duplicates typically equals the number of per-year file boundaries. '
+        f'If each input value is an instantaneous sample at its timestamp '
+        f'(e.g. a file running YYYY-01-01 00:00 to YYYY-12-31 23:00), rerun '
+        f'with --time-stamp-convention {other}.')
 
 
 def update_time_coverage(ds, times):

@@ -148,3 +148,78 @@ def test_detide_rejects_non_standard_calendar(tmp_path):
         assert False, 'expected a ValueError for a non-standard calendar'
     except ValueError as e:
         assert '360_day' in str(e)
+
+
+def _write_instant_year(path, year, n_nodes=3):
+    """One per-year hourly file stamped the way a reanalysis sampled on the
+    hour is: YYYY-01-01 00:00 through YYYY-12-31 23:00 inclusive."""
+    times = pd.date_range(f'{year}-01-01 00:00', f'{year}-12-31 23:00', freq='h')
+    data = np.random.default_rng(year).normal(
+        size=(n_nodes, len(times))).astype(np.float32)
+    node = _fake_node(n_nodes)
+    md = nc_metadata.load_metadata(
+        None, cli_overrides={'group_name': 'G', 'climate_forcing': 'F',
+                             'scenario': 'S', 'location': 'GESLA'})
+    extract.write_hourly_year(
+        path, n_nodes, node['node_index'], node['node_lon'], node['node_lat'],
+        node['node_depth'], node['point_lon'], node['point_lat'],
+        node['dist_km'], 'test.csv', md, times, data, 'ADCIRC', 'standard')
+    return times
+
+
+def test_instant_convention_avoids_duplicate_months_across_year_files(tmp_path):
+    """Regression for the CORA case: two adjacent per-year files whose first
+    timestep is exactly YYYY-01-01 00:00. Under 'end' the second file re-opens
+    the previous December; under 'instant' it does not."""
+    hourly = tmp_path / 'hourly'
+    hourly.mkdir()
+    for year in (1979, 1980):
+        _write_instant_year(
+            hourly / f'twl_1hr_G_F_S_GESLA_{year}01-{year}12.nc', year)
+
+    var = nc_metadata.VARIABLES['WaterLevel']['name']
+    year_files = nc_metadata.discover_hourly_year_files(hourly, var)
+    assert [y for y, _ in year_files] == [1979, 1980]
+
+    keys_end, keys_inst = [], []
+    for _, path in year_files:
+        ds = nc.Dataset(str(path), 'r')
+        times = nc_metadata.read_times(ds, 'time')
+        ds.close()
+        keys_end.extend(np.unique(
+            nc_metadata.month_start(times, 'standard', convention='end')))
+        keys_inst.extend(np.unique(
+            nc_metadata.month_start(times, 'standard', convention='instant')))
+
+    ok_end, dups_end = nc_metadata.periods_are_unique(keys_end)
+    ok_inst, dups_inst = nc_metadata.periods_are_unique(keys_inst)
+
+    # 'end' re-opens Dec 1979 -- one duplicate per year boundary -- and also
+    # invents a Dec 1978 from the very first timestep.
+    assert not ok_end
+    assert [(d.year, d.month) for d in dups_end] == [(1979, 12)]
+    assert (keys_end[0].year, keys_end[0].month) == (1978, 12)
+
+    # 'instant' gives exactly the 24 real months, in order, no duplicates.
+    assert ok_inst and dups_inst == []
+    assert len(keys_inst) == 24
+    assert (keys_inst[0].year, keys_inst[0].month) == (1979, 1)
+    assert (keys_inst[-1].year, keys_inst[-1].month) == (1980, 12)
+
+
+def test_instant_convention_gives_exact_day_counts(tmp_path):
+    """365 days for a non-leap year, 366 for a leap year, no spillover."""
+    hourly = tmp_path / 'hourly'
+    hourly.mkdir()
+    for year in (1979, 1980):
+        _write_instant_year(
+            hourly / f'twl_1hr_G_F_S_GESLA_{year}01-{year}12.nc', year)
+    var = nc_metadata.VARIABLES['WaterLevel']['name']
+    counts = {}
+    for year, path in nc_metadata.discover_hourly_year_files(hourly, var):
+        ds = nc.Dataset(str(path), 'r')
+        times = nc_metadata.read_times(ds, 'time')
+        ds.close()
+        counts[year] = len(np.unique(
+            nc_metadata.day_start(times, 'standard', convention='instant')))
+    assert counts == {1979: 365, 1980: 366}

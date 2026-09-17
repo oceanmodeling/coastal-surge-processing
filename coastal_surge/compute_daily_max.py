@@ -77,6 +77,7 @@ def parse_args():
              'metadata_template.yaml for the editable template.',
     )
     nc_metadata.add_naming_args(p)
+    nc_metadata.add_time_convention_arg(p)
     return p.parse_args()
 
 
@@ -257,6 +258,9 @@ def main():
         print(f'{out_path} already exists. Use --force to overwrite.')
         return
 
+    convention = nc_metadata.resolve_time_stamp_convention(metadata)
+    print(f'Time-stamping convention: {convention}')
+
     node = read_node_metadata(year_files[0][1])
 
     days = []
@@ -266,7 +270,8 @@ def main():
         print(f'\nReading {path} ...')
         times, data, calendar = read_hourly_year(path, var_name)
         time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
-        dates = nc_metadata.day_start(times, calendar)
+        dates = nc_metadata.day_start(times, calendar,
+                                      convention=convention)
 
         for date in sorted(np.unique(dates)):
             mask = dates == date
@@ -275,6 +280,9 @@ def main():
 
         print(f'  {len(days)} day(s) finalized so far '
               f'[{timer.time() - t0:.0f}s]')
+
+    nc_metadata.raise_on_duplicate_periods(
+        [d['date'] for d in days], 'day', convention)
 
     print(f'\n{len(days)} total day(s).')
 

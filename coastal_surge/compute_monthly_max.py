@@ -96,6 +96,7 @@ def parse_args():
              'metadata_template.yaml for the editable template.',
     )
     nc_metadata.add_naming_args(p)
+    nc_metadata.add_time_convention_arg(p)
     return p.parse_args()
 
 
@@ -353,6 +354,9 @@ def main():
         print(f'{out_path} already exists. Use --force to overwrite.')
         return
 
+    convention = nc_metadata.resolve_time_stamp_convention(metadata)
+    print(f'Time-stamping convention: {convention}')
+
     node = read_node_metadata(year_files[0][1])
 
     finalized = []
@@ -364,7 +368,8 @@ def main():
         print(f'\nReading {path} ...')
         times, data, calendar = read_hourly_year(path, var_name)
         time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
-        months_key = nc_metadata.month_start(times, calendar)
+        months_key = nc_metadata.month_start(times, calendar,
+                                             convention=convention)
 
         for month_val in sorted(np.unique(months_key)):
             mask = months_key == month_val
@@ -380,6 +385,10 @@ def main():
 
     if prev is not None:
         finalized.append(finalize(prev))
+
+    nc_metadata.raise_on_duplicate_periods(
+        [cftime.datetime(m['year'], m['month'], 1, calendar=calendar)
+         for m in finalized], 'month', convention)
 
     print(f'\n{len(finalized)} total month(s), {total_adjusted} node-month(s) '
           f'adjusted for the {MIN_SEPARATION_HOURS:.0f}h separation rule.')

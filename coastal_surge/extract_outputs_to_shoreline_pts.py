@@ -147,6 +147,7 @@ def parse_args():
              'present fall back to built-in defaults.',
     )
     nc_metadata.add_naming_args(p)
+    nc_metadata.add_time_convention_arg(p)
     return p.parse_args()
 
 
