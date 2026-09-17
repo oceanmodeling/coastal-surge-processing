@@ -961,6 +961,9 @@ NODE_INDEX_SCHEMES = {
     # MET Norway's ROMS Nordic4 submission: a 580x1024 curvilinear grid
     # addressed by a 0-based (i, j) pair, written as node_i/node_j.
     'ROMS': {'dims': 2, 'base': 0},
+    # University of the Balearic Islands' CoExMed submission: an unstructured
+    # SCHISM grid, reduced to its coastal nodes, numbered from 0.
+    'SCHISM': {'dims': 1, 'base': 0},
 }
 DEFAULT_MODEL_NAME = 'ADCIRC'
 
