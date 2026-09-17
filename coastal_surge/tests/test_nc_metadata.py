@@ -250,3 +250,27 @@ def test_convention_round_trips_through_metadata_and_file(tmp_path):
                                  variable_key='StormSurge')
     ds.close()
     assert nc_metadata.read_known_attrs(path)['time_stamp_convention'] == 'instant'
+
+
+def test_roms_two_dimensional_node_index_round_trips(tmp_path):
+    """MET Norway's ROMS submission indexes a curvilinear grid by a 0-based
+    (i, j) pair; write_node_index/read_node_index must preserve it."""
+    path = tmp_path / 'roms.nc'
+    idx = np.array([[2, 0], [7, 11], [519, 791]])
+    ds = nc.Dataset(str(path), 'w', format='NETCDF4')
+    ds.createDimension('node', idx.shape[0])
+    nc_metadata.write_node_index(ds, 'ROMS', idx)
+    ds.close()
+
+    ds = nc.Dataset(str(path), 'r')
+    assert set(('node_i', 'node_j')).issubset(ds.variables)
+    assert 'node_index' not in ds.variables
+    assert ds.variables['node_i'].cf_role == 'timeseries_id'
+    model_name, got = nc_metadata.read_node_index(ds)
+    ds.close()
+    assert model_name == 'ROMS'
+    np.testing.assert_array_equal(got, idx)
+
+
+def test_roms_scheme_is_zero_based_two_dimensional():
+    assert nc_metadata.get_node_index_scheme('ROMS') == {'dims': 2, 'base': 0}

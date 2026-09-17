@@ -958,6 +958,9 @@ def update_time_coverage(ds, times):
 #   'STRUCTURED': {'dims': 2, 'base': 0},
 NODE_INDEX_SCHEMES = {
     'ADCIRC': {'dims': 1, 'base': 1},
+    # MET Norway's ROMS Nordic4 submission: a 580x1024 curvilinear grid
+    # addressed by a 0-based (i, j) pair, written as node_i/node_j.
+    'ROMS': {'dims': 2, 'base': 0},
 }
 DEFAULT_MODEL_NAME = 'ADCIRC'
 
