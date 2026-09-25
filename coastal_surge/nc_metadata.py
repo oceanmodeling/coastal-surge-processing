@@ -457,14 +457,16 @@ def discover_hourly_year_files(hourly_dir, var_name):
     by build_filename() in hourly_dir, sorted by year.
 
     Matches the current build_filename() convention for a single-year
-    Hourly file: '{var_name}_1hr_..._{YYYY}01-{YYYY}12.nc' (a Hourly file
-    always spans exactly one calendar year, so the two YYYY tokens are
-    equal; only the start year is captured/returned).
+    Hourly file: '{var_name}_1hr_..._{YYYYMM}-{YYYYMM}.nc', where the
+    time-range token is the actual first/last timestamp of the source
+    data (see extract_outputs_to_shoreline_pts.py) and so need not be
+    calendar-aligned (e.g. a source file spanning Nov-Mar produces
+    '..._199511-199603.nc'). Only the start year is captured/returned.
     """
     hourly_dir = Path(hourly_dir)
     freq = _TIMESTEP_TO_FREQUENCY['Hourly']
     pattern = re.compile(
-        rf'^{re.escape(var_name)}_{re.escape(freq)}_.*_(\d{{4}})01-\d{{4}}12\.nc$')
+        rf'^{re.escape(var_name)}_{re.escape(freq)}_.*_(\d{{4}})\d{{2}}-\d{{4}}\d{{2}}\.nc$')
     results = []
     for f in sorted(hourly_dir.glob(f'{var_name}_{freq}_*.nc')):
         m = pattern.search(f.name)
