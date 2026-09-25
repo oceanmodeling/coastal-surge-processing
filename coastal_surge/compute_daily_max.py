@@ -12,12 +12,17 @@ can be run on the output of either Step 1 (twl) or Step 2 (ssgh):
   Step 3 — this script                           -> full-period DailyMax
   Step 4 — compute_monthly_max.py                -> full-period MonthlyMax
 
-Unlike compute_monthly_max.py, no cross-day adjustment is applied: this is a
-plain calendar-day maximum of the hourly series, with no minimum-separation
-rule between adjacent days' maxima. Because a calendar day always falls
-entirely within a single year's hourly file, each year can be processed
-independently in one streaming pass with no state carried across year
-boundaries.
+Unlike compute_monthly_max.py, no minimum-separation rule is applied between
+adjacent days' maxima -- this is a plain calendar-day maximum of the hourly
+series. One single instant is not guaranteed to fall in the same file as the
+rest of its calendar day, though: under the default 'instant' time-stamping
+convention, a per-year file that ends exactly on the next year's Jan 1
+00:00:00 has a trailing instant that belongs to the next file's first day,
+not this file's last one. That single column is carried across the file
+boundary rather than either dropped or double-counted -- see
+nc_metadata.apply_year_boundary_carry(). Every other timestep is already
+correctly placed within its own file, so this never delays or depends on
+more than one column of the neighboring file.
 
 Usage:
   python compute_daily_max.py \\
@@ -34,6 +39,7 @@ import sys
 import time as timer
 from pathlib import Path
 
+import cftime
 import netCDF4 as nc
 import numpy as np
 
@@ -77,6 +83,7 @@ def parse_args():
              'metadata_template.yaml for the editable template.',
     )
     nc_metadata.add_naming_args(p)
+    nc_metadata.add_time_convention_arg(p)
     return p.parse_args()
 
 
@@ -152,7 +159,12 @@ def write_daily_max(path, node, metadata, variable_key, days, calendar):
         extra={
             'source_csv': node['source_csv'],
             'daily_max_method': 'Calendar-day maximum of the hourly series, '
-                                 'with no cross-day adjustment.',
+                                 'with no minimum-separation rule between '
+                                 'adjacent days\' maxima. A single timestep '
+                                 'landing exactly on a per-year file boundary '
+                                 '(see time_stamp_convention) is carried to '
+                                 'the day it actually belongs to before '
+                                 'computing that day\'s maximum.',
         },
     )
     ds.createDimension('node', n_nodes)
@@ -257,16 +269,27 @@ def main():
         print(f'{out_path} already exists. Use --force to overwrite.')
         return
 
+    convention = nc_metadata.resolve_time_stamp_convention(metadata)
+    print(f'Time-stamping convention: {convention}')
+
     node = read_node_metadata(year_files[0][1])
 
     days = []
+    # Trailing instant of the previous file, if its last record landed
+    # exactly on a year boundary (see nc_metadata.apply_year_boundary_carry())
+    # -- that single column belongs to the next file's first day, not the
+    # previous file's last one.
+    carry = None
     t0 = timer.time()
 
     for year, path in year_files:
         print(f'\nReading {path} ...')
         times, data, calendar = read_hourly_year(path, var_name)
+        times, data, carry = nc_metadata.apply_year_boundary_carry(
+            times, data, calendar, carry)
         time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
-        dates = nc_metadata.day_start(times, calendar)
+        dates = nc_metadata.day_start(times, calendar,
+                                      convention=convention)
 
         for date in sorted(np.unique(dates)):
             mask = dates == date
@@ -275,6 +298,18 @@ def main():
 
         print(f'  {len(days)} day(s) finalized so far '
               f'[{timer.time() - t0:.0f}s]')
+
+    if carry is not None:
+        # The very last file's own final record landed on a year boundary
+        # with no following file to carry it into -- report it as its own
+        # (single-hour) day rather than dropping it.
+        date = cftime.datetime(carry['time'].year, 1, 1, calendar=calendar)
+        hours = np.array(
+            [nc_metadata.hours_since_epoch_scalar(carry['time'], calendar)])
+        days.append(compute_day_max(date, carry['data'][:, None], hours))
+
+    nc_metadata.raise_on_duplicate_periods(
+        [d['date'] for d in days], 'day', convention)
 
     print(f'\n{len(days)} total day(s).')
 
