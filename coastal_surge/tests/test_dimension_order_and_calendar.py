@@ -1,10 +1,12 @@
 """
 Integration checks that every pipeline write function declares `time` as
 the leading dimension on disk (for cdo compatibility) and propagates the
-source calendar end-to-end, plus the compute_daily_max.py 366-day
-regression (see test_nc_metadata.py for the underlying day_start() unit
-tests).
+source calendar end-to-end, plus the compute_daily_max.py/
+compute_monthly_max.py year-boundary carry regression (see
+nc_metadata.apply_year_boundary_carry() and test_nc_metadata.py for the
+underlying day_start()/month_start() unit tests).
 """
+import cftime
 import netCDF4 as nc
 import numpy as np
 import pandas as pd
@@ -69,18 +71,88 @@ def test_extraction_writes_time_leading_and_propagates_calendar(tmp_path):
     np.testing.assert_allclose(detide_data, year_data)
 
 
-def test_daily_max_gives_365_days_and_time_leading_dims(tmp_path):
+def _write_adcirc_year(path, year, data, calendar='standard'):
+    """One per-year hourly file stamped the way real ADCIRC zeta output
+    often is: one step after cold start (01:00) through exactly next year's
+    Jan 1 00:00:00 inclusive -- the pattern whose trailing instant
+    nc_metadata.apply_year_boundary_carry() must carry into the next file
+    rather than count toward this file's Dec 31."""
+    times = pd.date_range(f'{year}-01-01 01:00', f'{year + 1}-01-01 00:00',
+                          freq='h')
+    n_nodes = data.shape[0]
+    node = _fake_node(n_nodes)
+    md = nc_metadata.load_metadata(
+        None, cli_overrides={'group_name': 'G', 'climate_forcing': 'F',
+                             'scenario': 'S', 'location': 'GESLA'})
+    extract.write_hourly_year(
+        path, n_nodes, node['node_index'], node['node_lon'], node['node_lat'],
+        node['node_depth'], node['point_lon'], node['point_lat'],
+        node['dist_km'], 'test.csv', md, times, data, 'ADCIRC', calendar)
+    return times
+
+
+def test_daily_max_carries_year_boundary_spillover_into_next_year(tmp_path):
+    """Regression for the real ADCIRC pattern (01:00 -> next year's Jan 1
+    00:00 inclusive): the trailing instant of one file belongs to the next
+    file's Jan 1, not this file's Dec 31, and must be carried across the
+    file boundary -- see nc_metadata.apply_year_boundary_carry(). Mirrors
+    compute_daily_max.py's own main() loop rather than re-deriving its logic.
+    """
     calendar = 'standard'
     n_nodes = 2
-    times = pd.date_range('1978-01-01 01:00', '1979-01-01 00:00', freq='h')
-    data = np.random.default_rng(1).normal(size=(n_nodes, len(times)))
-    time_hours = nc_metadata.hours_since_epoch(times, calendar)
-    dates = nc_metadata.day_start(times, calendar)
+    spike = 100.0
+    hourly = tmp_path / 'hourly'
+    hourly.mkdir()
 
-    days = [cdm.compute_day_max(date, data[:, dates == date],
-                                time_hours[dates == date])
-            for date in sorted(np.unique(dates))]
-    assert len(days) == 365  # not 366 -- see the issue this fixes
+    times_1979 = pd.date_range('1979-01-01 01:00', '1980-01-01 00:00', freq='h')
+    data_1979 = np.zeros((n_nodes, len(times_1979)), dtype=np.float32)
+    data_1979[:, -1] = spike  # the trailing 1980-01-01 00:00 instant
+    _write_adcirc_year(hourly / 'twl_1hr_G_F_S_GESLA_197901-197912.nc',
+                       1979, data_1979, calendar)
+
+    times_1980 = pd.date_range('1980-01-01 01:00', '1981-01-01 00:00', freq='h')
+    data_1980 = np.zeros((n_nodes, len(times_1980)), dtype=np.float32)
+    _write_adcirc_year(hourly / 'twl_1hr_G_F_S_GESLA_198001-198012.nc',
+                       1980, data_1980, calendar)
+
+    var = nc_metadata.VARIABLES['WaterLevel']['name']
+    year_files = nc_metadata.discover_hourly_year_files(hourly, var)
+    assert [y for y, _ in year_files] == [1979, 1980]
+
+    days = []
+    carry = None
+    for year, path in year_files:
+        times, data, calendar = cdm.read_hourly_year(path, 'twl')
+        times, data, carry = nc_metadata.apply_year_boundary_carry(
+            times, data, calendar, carry)
+        time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
+        dates = nc_metadata.day_start(times, calendar)
+        for date in sorted(np.unique(dates)):
+            mask = dates == date
+            days.append(cdm.compute_day_max(date, data[:, mask],
+                                            time_hours_all[mask]))
+    if carry is not None:
+        date = cftime.datetime(carry['time'].year, 1, 1, calendar=calendar)
+        hours = np.array(
+            [nc_metadata.hours_since_epoch_scalar(carry['time'], calendar)])
+        days.append(cdm.compute_day_max(date, carry['data'][:, None], hours))
+
+    # 365 real days in 1979, 366 in 1980 (leap), plus the orphaned single
+    # instant (1980's own trailing spillover, with no 1981 file to receive
+    # it) finalized as its own one-hour day.
+    assert len(days) == 365 + 366 + 1
+    nc_metadata.raise_on_duplicate_periods(
+        [d['date'] for d in days], 'day', 'instant')
+
+    def _find(y, m, d):
+        return next(day for day in days
+                    if (day['date'].year, day['date'].month, day['date'].day)
+                    == (y, m, d))
+
+    # The spike -- 1979's file's own last record -- must land on 1980-01-01,
+    # not 1979-12-31.
+    assert _find(1980, 1, 1)['max_val'][0] == np.float32(spike)
+    assert _find(1979, 12, 31)['max_val'][0] == np.float32(0.0)
 
     out_path = tmp_path / 'daily_max.nc'
     cdm.write_daily_max(out_path, _fake_node(n_nodes),
@@ -88,36 +160,77 @@ def test_daily_max_gives_365_days_and_time_leading_dims(tmp_path):
                         calendar)
 
     ds = nc.Dataset(out_path)
-    assert ds.dimensions['time'].size == 365
+    assert ds.dimensions['time'].size == len(days)
     assert ds.variables['twl'].dimensions == ('time', 'node')
     assert ds.variables['time'].calendar == 'standard'
     ds.close()
 
 
-def test_monthly_max_puts_spillover_hour_in_correct_december(tmp_path):
+def test_monthly_max_carries_year_boundary_spillover_into_next_year(tmp_path):
+    """Same real ADCIRC boundary pattern as the daily-max regression above,
+    but at month granularity: the trailing instant belongs to next year's
+    January, not this year's December -- see
+    nc_metadata.apply_year_boundary_carry(). Mirrors compute_monthly_max.py's
+    own main() loop (using its actual compute_month_info()/_advance_month()/
+    finalize()) rather than re-deriving its logic."""
     calendar = 'standard'
     n_nodes = 2
-    times = pd.date_range('1978-01-01 01:00', '1979-01-01 00:00', freq='h')
-    data = np.random.default_rng(2).normal(size=(n_nodes, len(times)))
-    time_hours = nc_metadata.hours_since_epoch(times, calendar)
-    months_key = nc_metadata.month_start(times, calendar)
+    spike = 100.0
+    hourly = tmp_path / 'hourly'
+    hourly.mkdir()
 
-    unique_months = sorted(np.unique(months_key))
-    assert len(unique_months) == 12  # 1978 only, not a spurious Jan 1979
-    assert unique_months[-1] == __import__('cftime').datetime(
-        1978, 12, 1, calendar=calendar)
+    times_1979 = pd.date_range('1979-01-01 01:00', '1980-01-01 00:00', freq='h')
+    data_1979 = np.zeros((n_nodes, len(times_1979)), dtype=np.float32)
+    data_1979[:, -1] = spike  # the trailing 1980-01-01 00:00 instant
+    _write_adcirc_year(hourly / 'twl_1hr_G_F_S_GESLA_197901-197912.nc',
+                       1979, data_1979, calendar)
+
+    times_1980 = pd.date_range('1980-01-01 01:00', '1981-01-01 00:00', freq='h')
+    data_1980 = np.zeros((n_nodes, len(times_1980)), dtype=np.float32)
+    _write_adcirc_year(hourly / 'twl_1hr_G_F_S_GESLA_198001-198012.nc',
+                       1980, data_1980, calendar)
+
+    var = nc_metadata.VARIABLES['WaterLevel']['name']
+    year_files = nc_metadata.discover_hourly_year_files(hourly, var)
 
     finalized = []
     prev = None
-    for month_val in unique_months:
-        mask = months_key == month_val
-        cur = cmm.compute_month_info(month_val.year, month_val.month,
-                                     data[:, mask], time_hours[mask])
-        if prev is not None:
-            cmm.resolve_adjacency(prev, cur)
-            finalized.append(cmm.finalize(prev))
-        prev = cur
-    finalized.append(cmm.finalize(prev))
+    carry = None
+    for year, path in year_files:
+        times, data, calendar = cmm.read_hourly_year(path, 'twl')
+        times, data, carry = nc_metadata.apply_year_boundary_carry(
+            times, data, calendar, carry)
+        time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
+        months_key = nc_metadata.month_start(times, calendar)
+        for month_val in sorted(np.unique(months_key)):
+            mask = months_key == month_val
+            cur = cmm.compute_month_info(month_val.year, month_val.month,
+                                         data[:, mask], time_hours_all[mask])
+            prev, _ = cmm._advance_month(prev, cur, finalized)
+    if carry is not None:
+        cur = cmm.compute_month_info(
+            carry['time'].year, 1, carry['data'][:, None],
+            np.array([nc_metadata.hours_since_epoch_scalar(carry['time'],
+                                                            calendar)]))
+        prev, _ = cmm._advance_month(prev, cur, finalized)
+    if prev is not None:
+        finalized.append(cmm.finalize(prev))
+
+    # 12 real months in 1979, 12 in 1980, plus the orphaned single instant
+    # (1980's own trailing spillover, with no 1981 file to receive it)
+    # finalized as its own one-hour January 1981.
+    assert len(finalized) == 12 + 12 + 1
+    nc_metadata.raise_on_duplicate_periods(
+        [cftime.datetime(m['year'], m['month'], 1, calendar='standard')
+         for m in finalized], 'month', 'instant')
+
+    def _find(y, m):
+        return next(mo for mo in finalized if (mo['year'], mo['month']) == (y, m))
+
+    # The spike -- 1979's file's own last record -- must land on January
+    # 1980, not December 1979.
+    assert _find(1980, 1)['max_val'][0] == np.float32(spike)
+    assert _find(1979, 12)['max_val'][0] == np.float32(0.0)
 
     out_path = tmp_path / 'monthly_max.nc'
     cmm.write_monthly_max(out_path, _fake_node(n_nodes),
@@ -125,7 +238,7 @@ def test_monthly_max_puts_spillover_hour_in_correct_december(tmp_path):
                           finalized, 0, calendar)
 
     ds = nc.Dataset(out_path)
-    assert ds.dimensions['time'].size == 12
+    assert ds.dimensions['time'].size == len(finalized)
     assert ds.variables['twl'].dimensions == ('time', 'node')
     assert ds.variables['time'].calendar == 'standard'
     ds.close()

@@ -34,6 +34,17 @@ across month and year boundaries) plus the finalized max/time/adjusted
 arrays for every month completed so far. If interrupted, rerun from
 scratch — this pass is far cheaper than the Step 2 tidal fit.
 
+One single instant is not guaranteed to fall in the same file as the rest of
+its calendar month: under the default 'instant' time-stamping convention, a
+per-year file that ends exactly on the next year's Jan 1 00:00:00 has a
+trailing instant belonging to the next file's first month, not this file's
+last one. That single column is carried across the file boundary rather than
+either dropped or double-counted -- see
+nc_metadata.apply_year_boundary_carry(). Every other timestep is already
+correctly placed within its own file, so each file's month grouping is
+otherwise self-contained; only the pre-existing 24h-separation bookkeeping
+above spans file boundaries.
+
 Usage:
   python compute_monthly_max.py \\
       --hourly-dir /path/to/twl_hourly/ \\
@@ -203,6 +214,22 @@ def finalize(info):
     }
 
 
+def _advance_month(prev, cur, finalized):
+    """
+    Resolve the 24h-separation rule between the last two completed months
+    and finalize the older one into `finalized`, in place. `cur` becomes the
+    new pending-adjacency month.
+
+    Returns (cur, n_adjusted) -- n_adjusted is 0 when there was no `prev` yet
+    (the very first completed month of the run).
+    """
+    if prev is None:
+        return cur, 0
+    n_adjusted = resolve_adjacency(prev, cur)
+    finalized.append(finalize(prev))
+    return cur, n_adjusted
+
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -231,7 +258,10 @@ def write_monthly_max(path, node, metadata, variable_key, months, n_adjusted,
         extra={
             'source_csv': node['source_csv'],
             'monthly_max_method': (
-                'Calendar-month maximum of the hourly series. Adjacent '
+                'Calendar-month maximum of the hourly series. A single '
+                'timestep landing exactly on a per-year file boundary (see '
+                'time_stamp_convention) is carried to the month it actually '
+                'belongs to before computing that month\'s maximum. Adjacent '
                 f'months\' maxima are required to be separated by at least '
                 f'{MIN_SEPARATION_HOURS:.0f}h; where violated, the smaller '
                 f'of the two maxima is recomputed excluding that timestep. '
@@ -362,11 +392,18 @@ def main():
     finalized = []
     total_adjusted = 0
     prev = None
+    # Trailing instant of the previous file, if its last record landed
+    # exactly on a year boundary (see nc_metadata.apply_year_boundary_carry())
+    # -- that single column belongs to the next file's first month, not the
+    # previous file's last one.
+    carry = None
     t0 = timer.time()
 
     for year, path in year_files:
         print(f'\nReading {path} ...')
         times, data, calendar = read_hourly_year(path, var_name)
+        times, data, carry = nc_metadata.apply_year_boundary_carry(
+            times, data, calendar, carry)
         time_hours_all = nc_metadata.hours_since_epoch(times, calendar)
         months_key = nc_metadata.month_start(times, calendar,
                                              convention=convention)
@@ -375,13 +412,22 @@ def main():
             mask = months_key == month_val
             cur = compute_month_info(month_val.year, month_val.month,
                                      data[:, mask], time_hours_all[mask])
-            if prev is not None:
-                total_adjusted += resolve_adjacency(prev, cur)
-                finalized.append(finalize(prev))
-            prev = cur
+            prev, n = _advance_month(prev, cur, finalized)
+            total_adjusted += n
 
         print(f'  {len(finalized)} month(s) finalized so far '
               f'[{timer.time() - t0:.0f}s]')
+
+    if carry is not None:
+        # The very last file's own final record landed on a year boundary
+        # with no following file to carry it into -- report it as its own
+        # (single-hour) month rather than dropping it.
+        cur = compute_month_info(
+            carry['time'].year, 1, carry['data'][:, None],
+            np.array([nc_metadata.hours_since_epoch_scalar(carry['time'],
+                                                            calendar)]))
+        prev, n = _advance_month(prev, cur, finalized)
+        total_adjusted += n
 
     if prev is not None:
         finalized.append(finalize(prev))

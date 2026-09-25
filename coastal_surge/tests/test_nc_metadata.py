@@ -9,12 +9,14 @@ import pytest
 import nc_metadata
 
 
-def test_day_start_shifts_exact_midnight_to_previous_day():
+def test_day_start_shifts_exact_midnight_to_previous_day_under_end():
+    # 'end' is no longer the default (see DEFAULT_TIME_STAMP_CONVENTION), so
+    # this convention must now be requested explicitly.
     times = np.array([
         cftime.datetime(1978, 12, 31, 23, calendar='standard'),
         cftime.datetime(1979, 1, 1, 0, calendar='standard'),
     ], dtype=object)
-    days = nc_metadata.day_start(times, 'standard')
+    days = nc_metadata.day_start(times, 'standard', convention='end')
     assert days[0] == days[1] == cftime.datetime(1978, 12, 31, calendar='standard')
 
 
@@ -25,22 +27,39 @@ def test_day_start_is_a_noop_away_from_midnight():
     assert days[0] == cftime.datetime(1978, 6, 15, calendar='standard')
 
 
-def test_full_nonleap_year_hour_shifted_convention_gives_365_days():
-    # ADCIRC per-year file convention: first output is one step after cold
-    # start, last output lands exactly on next year's Jan 1 00:00:00 -- see
-    # compute_daily_max.py giving 366 days for 1978 before this fix.
+def test_day_start_defaults_to_instant():
+    """The default convention is 'instant': exactly midnight belongs to the
+    day that begins, not the one that just ended."""
+    times = np.array([cftime.datetime(1979, 1, 1, 0, calendar='standard')],
+                     dtype=object)
+    assert nc_metadata.day_start(times, 'standard')[0] == \
+        cftime.datetime(1979, 1, 1, calendar='standard')
+
+
+def test_full_nonleap_year_hour_shifted_end_convention_gives_365_days():
+    # A solo array shaped like the real ADCIRC per-year pattern (first output
+    # one step after cold start, last output landing exactly on next year's
+    # Jan 1 00:00:00). Under 'end' this collapses to 365 days by construction
+    # (the boundary instant is folded back into Dec 31); under the new
+    # 'instant' default it's legitimately a distinct (partial) 366th day
+    # belonging to the *next* file -- see
+    # nc_metadata.apply_year_boundary_carry() and
+    # test_dimension_order_and_calendar.py's cross-file regression, which
+    # covers the multi-file case this solo array can't.
     times = pd.date_range('1978-01-01 01:00', '1979-01-01 00:00', freq='h')
     assert len(times) == 8760
-    days = nc_metadata.day_start(times, 'standard')
-    assert len(np.unique(days)) == 365
+    days_end = nc_metadata.day_start(times, 'standard', convention='end')
+    assert len(np.unique(days_end)) == 365
+    days_instant = nc_metadata.day_start(times, 'standard', convention='instant')
+    assert len(np.unique(days_instant)) == 366
 
 
-def test_month_start_360_day_boundary_goes_to_prior_month():
+def test_month_start_360_day_boundary_goes_to_prior_month_under_end():
     times = np.array([
         cftime.datetime(1978, 2, 30, 23, calendar='360_day'),
         cftime.datetime(1978, 3, 1, 0, calendar='360_day'),
     ], dtype=object)
-    months = nc_metadata.month_start(times, '360_day')
+    months = nc_metadata.month_start(times, '360_day', convention='end')
     assert months[0] == months[1] == cftime.datetime(1978, 2, 1, calendar='360_day')
 
 
@@ -206,6 +225,68 @@ def test_explicit_epsilon_still_overrides_convention():
     got = nc_metadata.day_start(times, 'standard', convention='end',
                                 epsilon=timedelta(0))
     assert (got[0].month, got[0].day) == (3, 1)
+
+
+def test_is_year_start_instant():
+    assert nc_metadata.is_year_start_instant(
+        cftime.datetime(1980, 1, 1, 0, calendar='standard'))
+    assert not nc_metadata.is_year_start_instant(
+        cftime.datetime(1980, 1, 1, 1, calendar='standard'))
+    assert not nc_metadata.is_year_start_instant(
+        cftime.datetime(1979, 12, 31, 0, calendar='standard'))
+
+
+def test_apply_year_boundary_carry_is_a_noop_with_no_carry_and_no_spillover():
+    times = pd.date_range('1980-01-01 00:00', '1980-12-31 23:00', freq='h')
+    data = np.arange(2 * len(times), dtype=np.float64).reshape(2, len(times))
+    out_times, out_data, new_carry = nc_metadata.apply_year_boundary_carry(
+        times, data, 'standard', None)
+    assert len(out_times) == len(times)
+    np.testing.assert_array_equal(out_data, data)
+    assert new_carry is None
+
+
+def test_apply_year_boundary_carry_strips_trailing_year_start_instant():
+    times = pd.date_range('1979-01-01 01:00', '1980-01-01 00:00', freq='h')
+    data = np.zeros((2, len(times)))
+    data[:, -1] = 42.0
+    out_times, out_data, new_carry = nc_metadata.apply_year_boundary_carry(
+        times, data, 'standard', None)
+    assert len(out_times) == len(times) - 1
+    assert out_times[-1] == pd.Timestamp('1979-12-31 23:00')
+    assert new_carry is not None
+    assert new_carry['time'] == pd.Timestamp('1980-01-01 00:00')
+    np.testing.assert_array_equal(new_carry['data'], [42.0, 42.0])
+
+
+def test_apply_year_boundary_carry_prepends_to_next_file():
+    carry = {'time': pd.Timestamp('1980-01-01 00:00'),
+            'data': np.array([42.0, 42.0])}
+    times = pd.date_range('1980-01-01 01:00', '1980-01-01 03:00', freq='h')
+    data = np.ones((2, len(times)))
+    out_times, out_data, new_carry = nc_metadata.apply_year_boundary_carry(
+        times, data, 'standard', carry)
+    assert out_times[0] == pd.Timestamp('1980-01-01 00:00')
+    np.testing.assert_array_equal(out_data[:, 0], [42.0, 42.0])
+    np.testing.assert_array_equal(out_data[:, 1:], data)
+    assert new_carry is None  # this file's own last record isn't a spillover
+
+
+def test_apply_year_boundary_carry_duplicate_instant_is_just_prepended():
+    """A year that (unlike the usual +1h pattern) starts its own file with
+    00:00 -- duplicating what the previous file already spilled over -- is
+    not deduplicated: it's harmless for a maximum, so the instant simply
+    appears twice in this file's leading day/month group."""
+    carry = {'time': pd.Timestamp('1980-01-01 00:00'),
+            'data': np.array([42.0, 42.0])}
+    times = pd.date_range('1980-01-01 00:00', '1980-01-01 02:00', freq='h')
+    data = np.array([[7.0, 1.0, 1.0], [7.0, 1.0, 1.0]])
+    out_times, out_data, new_carry = nc_metadata.apply_year_boundary_carry(
+        times, data, 'standard', carry)
+    assert len(out_times) == len(times) + 1
+    assert list(out_times[:2]) == [pd.Timestamp('1980-01-01 00:00')] * 2
+    np.testing.assert_array_equal(out_data[:, 0], [42.0, 42.0])
+    np.testing.assert_array_equal(out_data[:, 1], [7.0, 7.0])
 
 
 def test_periods_are_unique_detects_a_reopened_period():

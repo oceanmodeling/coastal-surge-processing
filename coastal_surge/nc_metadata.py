@@ -42,23 +42,45 @@ STANDARD_CALENDARS = {'standard', 'gregorian', 'proleptic_gregorian'}
 # period a timestamp landing exactly on a period boundary belongs to, and so
 # it must be stated rather than assumed -- getting it wrong is silent.
 #
+#   'instant' Each value is an instantaneous sample at t, so a boundary
+#             timestamp belongs to the period that begins: exactly
+#             YYYY-MM-01 00:00:00 is the first instant of that month, not the
+#             last of the one before. This is the default, and is believed to
+#             be correct for every current SurgeMIP input -- ADCIRC's zeta
+#             output is an instantaneous snapshot (not an interval average),
+#             as is a reanalysis sampled on the hour (e.g. per-year files
+#             running YYYY-01-01 00:00 to YYYY-12-31 23:00).
 #   'end'     Each value represents the interval (t - 1 step, t], so a
 #             timestamp of exactly YYYY-MM-01 00:00:00 belongs to the month
-#             that just ended. This is the ADCIRC per-year output convention
-#             (first output one step after cold start, last landing exactly
-#             on the next year's Jan 1 00:00:00), and remains the default so
-#             that existing outputs stay reproducible.
-#   'instant' Each value is an instantaneous sample at t, so a boundary
-#             timestamp belongs to the period that begins. This is the usual
-#             convention for a reanalysis sampled on the hour, e.g. per-year
-#             files running YYYY-01-01 00:00 to YYYY-12-31 23:00.
+#             that just ended. Correct only for a genuinely interval- or
+#             accumulation-stamped source (e.g. hourly precipitation
+#             accumulated over the preceding hour). Kept for that case, but
+#             no dataset in this pipeline is currently believed to need it --
+#             in particular it does NOT correctly describe ADCIRC per-year
+#             output: even though many ADCIRC runs happen to start one step
+#             after cold start (01:00) and land their last record exactly on
+#             the next year's Jan 1 00:00:00 -- which 'end' would map onto
+#             Dec 31 of the year that just ended -- that record is still an
+#             instantaneous sample of the *new* year, not an average of the
+#             old one, and not every ADCIRC campaign even starts consistently
+#             at 01:00 (some years cold-start with a first record already at
+#             00:00), so an 'end'-shift assumption silently mis-files
+#             whichever years don't follow the "+1h" pattern.
 #
 # Applying 'end' to an instantaneous series moves every midnight value into
 # the previous day, and on per-year input re-opens the previous December,
 # producing one duplicate period per file boundary. day_start()/month_start()
 # select the shift; raise_on_duplicate_periods() catches the mistake.
+#
+# 'instant' alone does not fully solve per-year ADCIRC input, though: when a
+# year's file ends exactly on next year's Jan 1 00:00 (the "+1h" pattern
+# above), that trailing instant legitimately belongs to the *next* file's
+# first day/month, and compute_daily_max.py/compute_monthly_max.py must carry
+# it across the file boundary rather than either dropping it or double-
+# counting it against next year's own leading record -- see
+# apply_year_boundary_carry() below.
 TIME_STAMP_CONVENTIONS = ('end', 'instant')
-DEFAULT_TIME_STAMP_CONVENTION = 'end'
+DEFAULT_TIME_STAMP_CONVENTION = 'instant'
 _CONVENTION_EPSILON = {
     'end': timedelta(seconds=1),
     'instant': timedelta(0),
@@ -413,14 +435,17 @@ def add_time_convention_arg(parser):
     parser.add_argument(
         '--time-stamp-convention', choices=list(TIME_STAMP_CONVENTIONS),
         default=None,
-        help='How the input series stamps its values in time. "end" (the '
-             'default) treats each value as the interval (t - 1 step, t], so '
-             'a timestamp on a period boundary belongs to the period that '
-             'just ended -- the ADCIRC per-year convention. "instant" treats '
-             'each value as a sample at t, which is correct for a series '
-             'running e.g. YYYY-01-01 00:00 to YYYY-12-31 23:00. Choosing '
-             'wrongly shifts every midnight value by one period and produces '
-             'duplicate output periods at per-year file boundaries.',
+        help='How the input series stamps its values in time. "instant" '
+             '(the default) treats each value as a sample at t, so a '
+             'timestamp on a period boundary belongs to the period that '
+             'begins -- correct for an instantaneous source, which includes '
+             'ADCIRC output and an hourly-sampled reanalysis alike. "end" '
+             'treats each value as the interval (t - 1 step, t], so a '
+             'boundary timestamp belongs to the period that just ended -- '
+             'only correct for a genuinely interval/accumulation-stamped '
+             'source; not believed to apply to any current SurgeMIP input. '
+             'Choosing wrongly shifts every midnight value by one period and '
+             'produces duplicate output periods at per-year file boundaries.',
     )
 
 
@@ -872,17 +897,94 @@ def month_start(times, calendar, convention=None, epsilon=None):
                                   epsilon=epsilon)
 
 
+def is_year_start_instant(t):
+    """True if timestamp `t` (an element of a read_times() result) is
+    exactly the first instant of a calendar year: YYYY-01-01 00:00:00."""
+    return (t.month, t.day, t.hour, t.minute, t.second) == (1, 1, 0, 0, 0)
+
+
+def hours_since_epoch_scalar(time_val, calendar):
+    """Same as hours_since_epoch(), for a single timestamp rather than an
+    array -- used for a year-boundary carry (see
+    apply_year_boundary_carry()) that turns out to have no following file to
+    merge into, and so is finalized as its own one-instant period."""
+    return float(nc.date2num(time_val, TIME_UNITS, calendar))
+
+
+def apply_year_boundary_carry(times, data, calendar, carry):
+    """
+    Reconcile the single-instant spillover that occurs when a per-year
+    ADCIRC-style file's last record lands exactly on the next year's Jan 1
+    00:00:00: that instant is an instantaneous sample of the *next* year,
+    not this file's last day/month -- see the TIME_STAMP_CONVENTIONS note
+    above. Only ever moves a single trailing/leading column; the rest of
+    each file's own day/month grouping is untouched and stays fully
+    self-contained.
+
+    Two things happen here:
+
+    1. An incoming `carry` (the trailing column held from the *previous*
+       file, or None) is unconditionally prepended to `data`/`times`. If
+       this file's own first record already happens to be that same instant
+       (some ADCIRC campaigns aren't consistently offset by the same amount
+       from one year to the next, so a year can legitimately start at 00:00
+       with its own record for that instant already present), the instant
+       simply appears twice in this file's leading day/month group. That's
+       harmless for a maximum -- at worst it's a tie -- so no deduplication
+       or agreement check is attempted; only whether the day/month's max is
+       correct matters, not whether one raw instant is counted once or
+       twice.
+    2. If this file's *own* last record lands exactly on a year boundary,
+       that column is stripped back out and returned as the new carry for
+       the next file, instead of being counted toward this file's own last
+       day/month.
+
+    Parameters
+    ----------
+    times : pandas.DatetimeIndex or ndarray of cftime.datetime, as returned
+        by nc_metadata.read_times()
+    data : ndarray (n_nodes, n_times)
+    calendar : str
+    carry : dict {'time': <a times[i]-like value>, 'data': ndarray (n_nodes,)}
+        or None
+
+    Returns
+    -------
+    times, data : adjusted for this file's own day/month grouping
+    new_carry : dict or None, to pass into the next file's call
+    """
+    if carry is not None:
+        data = np.concatenate([carry['data'][:, None], data], axis=1)
+        if isinstance(times, pd.DatetimeIndex):
+            times = pd.DatetimeIndex([carry['time']]).append(times)
+        else:
+            times = np.concatenate(
+                [np.array([carry['time']], dtype=object), times])
+
+    new_carry = None
+    if is_year_start_instant(times[-1]):
+        new_carry = {'time': times[-1], 'data': data[:, -1].copy()}
+        data = data[:, :-1]
+        times = times[:-1]
+
+    return times, data, new_carry
+
+
 def periods_are_unique(periods):
     """
     Return (ok, duplicates) for a sequence of period keys produced by
     day_start()/month_start() and then finalized in streaming order.
 
-    A duplicate means the same calendar day/month was finalized twice, which
-    happens when the time-stamping convention is wrong for the input: an
-    'end' shift applied to an instantaneous per-year series pushes each
-    year's first timestep back into the previous December, re-opening a
-    period the streaming pass had already closed. Callers should treat this
-    as an error rather than emit duplicated records.
+    A duplicate means the same calendar day/month was finalized twice. The
+    classic cause is a wrong time-stamping convention: an 'end' shift applied
+    to an instantaneous per-year series pushes each year's first timestep
+    back into the previous December, re-opening a period the streaming pass
+    had already closed. apply_year_boundary_carry() is expected to have
+    already reconciled the *legitimate* per-year spillover/duplicate-instant
+    cases (see its docstring) before this check runs, so a duplicate reaching
+    here usually means the convention is genuinely wrong for this input, or
+    a boundary spillover of more than a single instant. Callers should
+    treat this as an error rather than emit duplicated records.
     """
     seen, dups = set(), []
     for p in periods:
